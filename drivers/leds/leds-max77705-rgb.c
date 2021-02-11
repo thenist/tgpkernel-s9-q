@@ -70,8 +70,6 @@
 				(time < 8000) ? (time-5000)/1000+10 :	 \
 				(time < 12000) ? (time-8000)/2000+13 : 15)
 
-#define LED_RMP_TIME		800
-
 #define OCTA_LEN		4
 #define RGB_BUFSIZE		30
 
@@ -89,12 +87,9 @@ static unsigned int brightness_ratio_r_low = 20;
 static unsigned int brightness_ratio_g_low = 20;
 static unsigned int brightness_ratio_b_low = 20;
 static u8 led_lowpower_mode;
+static u8 led_pattern_num;
 
 static unsigned int octa_color;
-
-static unsigned int led_enable_fade = 1;
-static unsigned int led_fade_time_up = LED_RMP_TIME;
-static unsigned int led_fade_time_down = LED_RMP_TIME;
 
 enum max77705_led_color {
 	WHITE,
@@ -132,10 +127,12 @@ static int max77705_rgb_number(struct led_classdev *led_cdev,
 
 	for (i = 0; i < 4; i++) {
 		if (led_cdev == &max77705_rgb->led[i]) {
-			pr_info("leds-max77705-rgb: %s, %d\n", __func__, i);
+			pr_debug("leds-max77705-rgb: %s, %d\n", __func__, i);
 			return i;
 		}
 	}
+
+	pr_err("leds-max77705-rgb: %s, can't find rgb number\n", __func__);
 
 	return -ENODEV;
 }
@@ -186,8 +183,6 @@ static void max77705_rgb_set_state(struct led_classdev *led_cdev,
 	struct device *dev;
 	int n;
 	int ret;
-
-	pr_info("leds-max77705-rgb: %s\n", __func__);
 
 	ret = max77705_rgb_number(led_cdev, &max77705_rgb);
 
@@ -273,7 +268,7 @@ static unsigned int max77705_rgb_get(struct led_classdev *led_cdev)
 		dev_err(dev, "can't read LEDEN : %d\n", ret);
 		return 0;
 	}
-	if (!(value & (1 << n)))
+	if (!(value & (3 << (2*n))))
 		return LED_OFF;
 
 	/* Get current */
@@ -295,16 +290,19 @@ static int max77705_rgb_ramp(struct device *dev, int ramp_up, int ramp_down)
 
 	pr_info("leds-max77705-rgb: %s\n", __func__);
 
-	if (! led_enable_fade)
-		led_fade_time_up = led_fade_time_down = LED_RMP_TIME;
+	if (ramp_up <= 800) {
+		ramp_up /= 100;
+	} else {
+		ramp_up = (ramp_up - 800) * 2 + 800;
+		ramp_up /= 100;
+	}
 
-	if (ramp_up > led_fade_time_up)
-		ramp_up = (ramp_up - led_fade_time_up) * 2 + led_fade_time_up;
-	ramp_up /= 100;
-
-	if (ramp_down > led_fade_time_down)
-		ramp_down = (ramp_down - led_fade_time_down) * 2 + led_fade_time_down;
-	ramp_down /= 100;
+	if (ramp_down <= 800) {
+		ramp_down /= 100;
+	} else {
+		ramp_down = (ramp_down - 800) * 2 + 800;
+		ramp_down /= 100;
+	}
 
 	value = (ramp_down) | (ramp_up << 4);
 	ret = max77705_write_reg(max77705_rgb->i2c,
@@ -511,6 +509,12 @@ static void max77705_rgb_reset(struct device *dev)
 	max77705_rgb_blink(dev, 0, 0);
 }
 
+static ssize_t show_max77705_rgb_lowpower(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, RGB_BUFSIZE, "%d\n", led_lowpower_mode);
+}
+
 static ssize_t store_max77705_rgb_lowpower(struct device *dev,
 					struct device_attribute *devattr,
 					const char *buf, size_t count)
@@ -530,6 +534,13 @@ static ssize_t store_max77705_rgb_lowpower(struct device *dev,
 
 	return count;
 }
+
+static ssize_t show_max77705_rgb_brightness(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, RGB_BUFSIZE, "%d\n", led_dynamic_current);
+}
+
 static ssize_t store_max77705_rgb_brightness(struct device *dev,
 					struct device_attribute *devattr,
 					const char *buf, size_t count)
@@ -554,6 +565,12 @@ static ssize_t store_max77705_rgb_brightness(struct device *dev,
 	return count;
 }
 
+static ssize_t show_max77705_rgb_pattern(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, RGB_BUFSIZE, "%d\n", led_pattern_num);
+}
+
 static ssize_t store_max77705_rgb_pattern(struct device *dev,
 					struct device_attribute *devattr,
 					const char *buf, size_t count)
@@ -568,6 +585,7 @@ static ssize_t store_max77705_rgb_pattern(struct device *dev,
 		return count;
 	}
 	pr_info("leds-max77705-rgb: %s pattern=%d lowpower=%i\n", __func__, mode, led_lowpower_mode);
+	led_pattern_num = mode;
 
 	/* Set all LEDs Off */
 	max77705_rgb_reset(dev);
@@ -586,43 +604,23 @@ static ssize_t store_max77705_rgb_pattern(struct device *dev,
 		max77705_rgb_set_state(&max77705_rgb->led[RED], led_dynamic_current, LED_ALWAYS_ON);
 		break;
 	case CHARGING_ERR:
-		if (led_enable_fade) {
-			max77705_rgb_ramp(dev, led_fade_time_up, led_fade_time_down);
-			max77705_rgb_blink(dev, led_fade_time_up, 500);
-		} else {
-			max77705_rgb_blink(dev, 500, 500);
-		}
+		max77705_rgb_blink(dev, 500, 500);
 		max77705_rgb_set_state(&max77705_rgb->led[RED], led_dynamic_current, LED_BLINK);
 		break;
 	case MISSED_NOTI:
-		if (led_enable_fade) {
-			max77705_rgb_ramp(dev, led_fade_time_up, led_fade_time_down);
-			max77705_rgb_blink(dev, led_fade_time_up, 5000);
-		} else {
-			max77705_rgb_blink(dev, 500, 5000);
-		}
+		max77705_rgb_blink(dev, 500, 5000);
 		max77705_rgb_set_state(&max77705_rgb->led[BLUE], led_dynamic_current, LED_BLINK);
 		break;
 	case LOW_BATTERY:
-		if (led_enable_fade) {
-			max77705_rgb_ramp(dev, led_fade_time_up, led_fade_time_down);
-			max77705_rgb_blink(dev, led_fade_time_up, 5000);
-		} else {
-			max77705_rgb_blink(dev, 500, 5000);
-		}
+		max77705_rgb_blink(dev, 500, 5000);
 		max77705_rgb_set_state(&max77705_rgb->led[RED], led_dynamic_current, LED_BLINK);
 		break;
 	case FULLY_CHARGED:
 		max77705_rgb_set_state(&max77705_rgb->led[GREEN], led_dynamic_current, LED_ALWAYS_ON);
 		break;
 	case POWERING:
-		if (led_enable_fade) {
-			max77705_rgb_ramp(dev, led_fade_time_up, led_fade_time_down);
-			max77705_rgb_blink(dev, led_fade_time_up, 200);
-		} else {
-			max77705_rgb_ramp(dev, LED_RMP_TIME, LED_RMP_TIME);
-			max77705_rgb_blink(dev, 200, 200);
-		}
+		max77705_rgb_ramp(dev, 800, 800);
+		max77705_rgb_blink(dev, 200, 200);
 		max77705_rgb_set_state(&max77705_rgb->led[BLUE], led_dynamic_current, LED_ALWAYS_ON);
 		max77705_rgb_set_state(&max77705_rgb->led[GREEN], led_dynamic_current, LED_BLINK);
 		break;
@@ -631,6 +629,22 @@ static ssize_t store_max77705_rgb_pattern(struct device *dev,
 	}
 
 	return count;
+}
+
+static ssize_t show_max77705_rgb_blink(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev);
+	unsigned int led_r_en = 0, led_g_en = 0, led_b_en = 0;
+	int ret = 0;
+
+	led_r_en = max77705_rgb_get(&max77705_rgb->led[RED]);
+	led_g_en = max77705_rgb_get(&max77705_rgb->led[GREEN]);
+	led_b_en = max77705_rgb_get(&max77705_rgb->led[BLUE]);
+
+	ret = !!(led_r_en | led_g_en | led_b_en);
+
+	return snprintf(buf, RGB_BUFSIZE, "%d\n", ret);
 }
 
 static ssize_t store_max77705_rgb_blink(struct device *dev,
@@ -739,8 +753,6 @@ static ssize_t store_max77705_rgb_blink(struct device *dev,
 	}
 
 	/*Set LED blink mode*/
-	if (delay_on_time > 0)
-		max77705_rgb_ramp(dev, led_fade_time_up, led_fade_time_down);
 	max77705_rgb_blink(dev, delay_on_time, delay_off_time);
 
 	ret = max77705_update_reg(max77705_rgb->i2c, MAX77705_RGBLED_REG_LEDEN, led_en, 0xff);
@@ -824,7 +836,7 @@ out:
 static ssize_t led_delay_on_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
-	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev);
+	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev->parent);
 
 	return snprintf(buf, RGB_BUFSIZE, "%d\n", max77705_rgb->delay_on_times_ms);
 }
@@ -833,7 +845,7 @@ static ssize_t led_delay_on_store(struct device *dev,
 			struct device_attribute *attr,
 			const char *buf, size_t count)
 {
-	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev);
+	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev->parent);
 	unsigned int time;
 
 	if (kstrtouint(buf, 0, &time)) {
@@ -849,7 +861,7 @@ static ssize_t led_delay_on_store(struct device *dev,
 static ssize_t led_delay_off_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
-	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev);
+	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev->parent);
 
 	return snprintf(buf, RGB_BUFSIZE, "%d\n", max77705_rgb->delay_off_times_ms);
 }
@@ -858,7 +870,7 @@ static ssize_t led_delay_off_store(struct device *dev,
 			struct device_attribute *attr,
 			const char *buf, size_t count)
 {
-	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev);
+	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev->parent);
 	unsigned int time;
 
 	if (kstrtouint(buf, 0, &time)) {
@@ -875,12 +887,9 @@ static ssize_t led_blink_store(struct device *dev,
 			struct device_attribute *attr,
 			const char *buf, size_t count)
 {
-	const struct device *parent = dev->parent;
-	struct max77705_rgb *max77705_rgb_num = dev_get_drvdata(parent);
-	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev);
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct max77705_rgb *max77705_rgb = dev_get_drvdata(dev->parent);
 	unsigned int blink_set;
-	int n = 0;
-	int i;
 	int ret;
 
 	ret = sscanf(buf, "%1d", &blink_set);
@@ -894,112 +903,31 @@ static ssize_t led_blink_store(struct device *dev,
 		max77705_rgb->delay_off_times_ms = LED_OFF;
 	}
 
-	for (i = 0; i < 4; i++) {
-		if (dev == max77705_rgb_num->led[i].dev)
-			n = i;
-	}
-
-	max77705_rgb_blink(max77705_rgb_num->led[n].dev->parent,
+	max77705_rgb_blink(dev->parent,
 		max77705_rgb->delay_on_times_ms,
 		max77705_rgb->delay_off_times_ms);
-	max77705_rgb_set_state(&max77705_rgb_num->led[n], led_dynamic_current, LED_BLINK);
+	max77705_rgb_set_state(led_cdev, led_dynamic_current, LED_BLINK);
 
 	pr_info("leds-max77705-rgb: %s\n", __func__);
-	return count;
-}
-
-static ssize_t led_fade_show(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	int ret;
-
-	ret = snprintf(buf, RGB_BUFSIZE, "%d\n", led_enable_fade);
-
-	pr_info("leds-max77705-rgb: %s: led_fade=%d\n", __func__, led_enable_fade);
-	return ret;
-}
-static ssize_t led_fade_store(struct device *dev,
-			struct device_attribute *attr,
-			const char *buf, size_t count)
-{
-	int retval;
-	int enabled = 0;
-
-	retval = sscanf(buf, "%1d", &enabled);
-
-	if (retval && (enabled == 0 || enabled == 1))
-		led_enable_fade = enabled;
-
-	return count;
-}
-static ssize_t led_fade_time_up_show(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	int ret;
-
-	ret = snprintf(buf, RGB_BUFSIZE, "%d\n", led_fade_time_up);
-
-	pr_info("leds-max77705-rgb: %s: led_fade_time_up=%d\n", __func__, led_fade_time_up);
-	return ret;
-}
-static ssize_t led_fade_time_up_store(struct device *dev,
-			struct device_attribute *attr,
-			const char *buf, size_t count)
-{
-	int retval;
-	int val = 0;
-
-	retval = sscanf(buf, "%d", &val);
-
-	if (retval && val >= 100 && val <= 4000)
-		led_fade_time_up = val;
-
-	return count;
-}
-static ssize_t led_fade_time_down_show(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	int ret;
-
-	ret = snprintf(buf, RGB_BUFSIZE, "%d\n", led_fade_time_down);
-
-	pr_info("leds-max77705-rgb: %s: led_fade_time_down=%d\n", __func__, led_fade_time_down);
-	return ret;
-}
-static ssize_t led_fade_time_down_store(struct device *dev,
-			struct device_attribute *attr,
-			const char *buf, size_t count)
-{
-	int retval;
-	int val = 0;
-
-	retval = sscanf(buf, "%d", &val);
-
-	if (retval && val >= 100 && val <= 4000)
-		led_fade_time_down = val;
-
 	return count;
 }
 
 /* permission for sysfs node */
 static DEVICE_ATTR(delay_on, 0640, led_delay_on_show, led_delay_on_store);
 static DEVICE_ATTR(delay_off, 0640, led_delay_off_show, led_delay_off_store);
-static DEVICE_ATTR(blink, 0640, NULL, led_blink_store);
+static DEVICE_ATTR(blink, 0220, NULL, led_blink_store);
 
 #ifdef SEC_LED_SPECIFIC
 /* below nodes is SAMSUNG specific nodes */
-static DEVICE_ATTR(led_r, 0660, NULL, store_led_r);
-static DEVICE_ATTR(led_g, 0660, NULL, store_led_g);
-static DEVICE_ATTR(led_b, 0660, NULL, store_led_b);
+static DEVICE_ATTR(led_r, 0220, NULL, store_led_r);
+static DEVICE_ATTR(led_g, 0220, NULL, store_led_g);
+static DEVICE_ATTR(led_b, 0220, NULL, store_led_b);
 /* led_pattern node permission is 222 */
 /* To access sysfs node from other groups */
-static DEVICE_ATTR(led_pattern, 0660, NULL, store_max77705_rgb_pattern);
-static DEVICE_ATTR(led_blink, 0660, NULL,  store_max77705_rgb_blink);
-static DEVICE_ATTR(led_brightness, 0660, NULL, store_max77705_rgb_brightness);
-static DEVICE_ATTR(led_lowpower, 0660, NULL,  store_max77705_rgb_lowpower);
-static DEVICE_ATTR(led_fade, 0660, led_fade_show, led_fade_store);
-static DEVICE_ATTR(led_fade_time_up, 0660, led_fade_time_up_show, led_fade_time_up_store);
-static DEVICE_ATTR(led_fade_time_down, 0660, led_fade_time_down_show, led_fade_time_down_store);
+static DEVICE_ATTR(led_pattern, 0660, show_max77705_rgb_pattern, store_max77705_rgb_pattern);
+static DEVICE_ATTR(led_blink, 0660, show_max77705_rgb_blink,  store_max77705_rgb_blink);
+static DEVICE_ATTR(led_brightness, 0660, show_max77705_rgb_brightness, store_max77705_rgb_brightness);
+static DEVICE_ATTR(led_lowpower, 0660, show_max77705_rgb_lowpower,  store_max77705_rgb_lowpower);
 #endif
 
 static struct attribute *led_class_attrs[] = {
@@ -1022,9 +950,6 @@ static struct attribute *sec_led_attributes[] = {
 	&dev_attr_led_blink.attr,
 	&dev_attr_led_brightness.attr,
 	&dev_attr_led_lowpower.attr,
-	&dev_attr_led_fade.attr,
-	&dev_attr_led_fade_time_up.attr,
-	&dev_attr_led_fade_time_down.attr,
 	NULL,
 };
 
@@ -1061,6 +986,7 @@ static int max77705_rgb_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	max77705_rgb->i2c = max77705_dev->i2c;
+	platform_set_drvdata(pdev, max77705_rgb);
 
 	for (i = 0; i < 4; i++) {
 		ret = snprintf(name, RGB_BUFSIZE, "%s", pdata->name[i])+1;
@@ -1101,8 +1027,6 @@ static int max77705_rgb_probe(struct platform_device *pdev)
 		dev_err(dev, "Failed to create sysfs group for samsung specific led\n");
 		goto device_create_err;
 	}
-
-	platform_set_drvdata(pdev, max77705_rgb);
 
 	pr_info("leds-max77705-rgb: %s done\n", __func__);
 
@@ -1161,8 +1085,8 @@ static void max77705_rgb_shutdown(struct platform_device *pdev)
 
 static struct platform_driver max77705_fled_driver = {
 	.driver		= {
-	.name		= "leds-max77705-rgb",
-	.owner		= THIS_MODULE,
+		.name	= "leds-max77705-rgb",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= max77705_rgb_probe,
 	.remove		= max77705_rgb_remove,

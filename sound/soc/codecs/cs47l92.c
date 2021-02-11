@@ -30,10 +30,6 @@
 #include "madera.h"
 #include "wm_adsp.h"
 
-#ifdef CONFIG_MORO_SOUND
-#include "moro_sound.h"
-#endif
-
 #define CS47L92_NUM_ADSP	1
 #define CS47L92_MONO_OUTPUTS	3
 
@@ -1967,10 +1963,6 @@ static int cs47l92_codec_probe(struct snd_soc_codec *codec)
 
 	madera->dapm = snd_soc_codec_get_dapm(codec);
 
-#ifdef CONFIG_MORO_SOUND
-	moro_sound_hook_moon_pcm_probe(madera->regmap);
-#endif
-
 	ret = madera_init_inputs(codec,
 				 cs47l92_dmic_inputs,
 				 ARRAY_SIZE(cs47l92_dmic_inputs),
@@ -2164,11 +2156,17 @@ static int cs47l92_probe(struct platform_device *pdev)
 	ret = snd_soc_register_codec(&pdev->dev, &soc_codec_dev_cs47l92,
 				     cs47l92_dai, ARRAY_SIZE(cs47l92_dai));
 	if (ret < 0) {
+#ifdef CONFIG_SND_SOC_SAMSUNG_AUDIO
+		sec_audio_bootlog(3, &pdev->dev, "%s: Failed to register codec: %d\n", __func__, ret);
+#endif
 		dev_err(&pdev->dev, "Failed to register codec: %d\n", ret);
 		snd_soc_unregister_platform(&pdev->dev);
 		goto error;
 	}
 
+#ifdef CONFIG_SND_SOC_SAMSUNG_AUDIO
+	sec_audio_bootlog(6, &pdev->dev, "%s: done\n", __func__);
+#endif
 	return ret;
 
 error:

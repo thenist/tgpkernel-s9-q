@@ -1642,6 +1642,16 @@ static void fw_update(void *device_data)
 	int retval = 0;
 
 	sec_cmd_set_default_result(sec);
+#if defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+	if (sec->cmd_param[0] == 1) {
+		snprintf(buff, sizeof(buff), "%s", "OK");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_OK;
+		input_info(true, &ts->client->dev, "%s: user_ship, success [%d]\n", __func__, retval);
+		return;
+	}
+#endif
+
 	if (ts->power_status == SEC_TS_STATE_POWER_OFF) {
 		input_err(true, &ts->client->dev, "%s: [ERROR] Touch is stopped\n",
 				__func__);
@@ -6613,7 +6623,7 @@ static void set_pressure_user_level(void *device_data)
 
 	input_info(true, &ts->client->dev, "%s: set user level: %d\n", __func__, data[0]);
 
-	ts->pressure_user_level = data[0];
+	ts->pressure_user_level = sec->cmd_param[0];
 
 	addr[0] = SEC_TS_CMD_SPONGE_OFFSET_PRESSURE_THD_HIGH;
 	ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SPONGE_READ_PARAM, addr, 2);
@@ -6687,7 +6697,7 @@ static void get_pressure_user_level(void *device_data)
 		goto out_get_user_level;
 
 	input_err(true, &ts->client->dev, "%s: set user level: %d\n", __func__, data[0]);
-	ts->pressure_user_level = data[0];
+	/* ts->pressure_user_level = data[0]; */
 
 	snprintf(buff, sizeof(buff), "%s", "OK");
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));

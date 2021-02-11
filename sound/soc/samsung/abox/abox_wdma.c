@@ -289,9 +289,6 @@ static int abox_wdma_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		if (memblock_is_memory(substream->runtime->dma_addr))
-			abox_request_dram_on(data->pdev_abox, dev, true);
-
 		pcmtask_msg->param.trigger = 1;
 		ret = abox_wdma_request_ipc(data, &msg, 1, 0);
 		switch (data->type) {
@@ -318,9 +315,6 @@ static int abox_wdma_trigger(struct snd_pcm_substream *substream, int cmd)
 		default:
 			break;
 		}
-
-		if (memblock_is_memory(substream->runtime->dma_addr))
-			abox_request_dram_on(data->pdev_abox, dev, false);
 		break;
 	default:
 		ret = -EINVAL;
@@ -468,10 +462,13 @@ static int abox_wdma_mmap(struct snd_pcm_substream *substream,
 	abox_request_cpu_gear_dai(dev, data->abox_data, rtd->cpu_dai,
 			data->abox_data->cpu_gear_min - 1);
 
-	return dma_mmap_writecombine(dev, vma,
-			runtime->dma_area,
-			runtime->dma_addr,
-			runtime->dma_bytes);
+	if (data->buf_type == BUFFER_TYPE_ION)
+		return dma_buf_mmap(data->ion_buf.dma_buf, vma, 0);
+	else
+		return dma_mmap_writecombine(dev, vma,
+				runtime->dma_area,
+				runtime->dma_addr,
+				runtime->dma_bytes);
 }
 
 static int abox_wdma_ack(struct snd_pcm_substream *substream)
@@ -647,7 +644,7 @@ static int abox_wdma_fio_common_ioctl(struct snd_hwdep *hw, struct file *filp,
 		unsigned int cmd, unsigned long __user *_arg)
 {
 	struct abox_platform_data *data = hw->private_data;
-	struct device *dev = &data->pdev->dev;
+	struct device *dev;
 	struct snd_pcm_mmap_fd mmap_fd;
 
 	int ret = 0;
@@ -655,6 +652,8 @@ static int abox_wdma_fio_common_ioctl(struct snd_hwdep *hw, struct file *filp,
 
 	if (!data || (((cmd >> 8) & 0xff) != 'U'))
 		return -ENOTTY;
+
+	dev = &data->pdev->dev;
 
 	if (get_user(arg, _arg))
 		return -EFAULT;

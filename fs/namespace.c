@@ -25,6 +25,7 @@
 #include <linux/bootmem.h>
 #include <linux/task_work.h>
 #include <linux/slub_def.h>
+#include <linux/fslog.h>
 #include "pnode.h"
 #include "internal.h"
 
@@ -32,8 +33,14 @@
 #define KDP_MOUNT_SYSTEM "/system"
 #define KDP_MOUNT_SYSTEM_LEN strlen(KDP_MOUNT_SYSTEM)
 
+#define KDP_MOUNT_SYSTEM_AS_ROOT "/root"
+#define KDP_MOUNT_SYSTEM_AS_ROOT_LEN strlen(KDP_MOUNT_SYSTEM_AS_ROOT)
+
 #define KDP_MOUNT_ODM "/odm"
 #define KDP_MOUNT_ODM_LEN strlen(KDP_MOUNT_ODM)
+
+#define KDP_MOUNT_PRODUCT "/product"
+#define KDP_MOUNT_PRODUCT_LEN strlen(KDP_MOUNT_PRODUCT)
 
 #define KDP_MOUNT_VENDOR "/vendor"
 #define KDP_MOUNT_VENDOR_LEN strlen(KDP_MOUNT_VENDOR)
@@ -41,6 +48,8 @@
 
 /* Maximum number of mounts in a mount namespace */
 unsigned int sysctl_mount_max __read_mostly = 100000;
+
+static unsigned int sys_umount_trace_status;
 
 static unsigned int m_hash_mask __read_mostly;
 static unsigned int m_hash_shift __read_mostly;
@@ -123,6 +132,61 @@ static inline struct hlist_head *m_hash(struct vfsmount *mnt, struct dentry *den
 	return &mount_hashtable[tmp & m_hash_mask];
 }
 
+enum {
+	UMOUNT_STATUS_ADD_TASK = 0,
+	UMOUNT_STATUS_REMAIN_NS,
+	UMOUNT_STATUS_REMAIN_MNT_COUNT,
+	UMOUNT_STATUS_ADD_DELAYED_WORK,
+	UMOUNT_STATUS_MAX
+};
+
+static const char *umount_exit_str[UMOUNT_STATUS_MAX] = {
+	"ADDED_TASK", "REMAIN_NS", "REMAIN_CNT", "DELAY_TASK"
+};
+
+static const char *exception_process[] = {
+	"main", "ch_zygote", "usap32", "usap64", NULL,
+};
+
+static inline void sys_umount_trace_set_status(unsigned int status)
+{
+	sys_umount_trace_status = status;
+}
+
+static inline int is_exception(char *comm)
+{
+	unsigned int idx = 0;
+
+	do {
+		if (!strcmp(comm, exception_process[idx]))
+			return 1;
+	} while (exception_process[++idx]);
+
+	return 0;
+}
+
+static inline void sys_umount_trace_print(struct mount *mnt, int flags)
+{
+#ifdef CONFIG_RKP_NS_PROT
+	struct super_block *sb = mnt->mnt->mnt_sb;
+	int mnt_flags = mnt->mnt->mnt_flags;
+#else
+	struct super_block *sb = mnt->mnt.mnt_sb;
+	int mnt_flags = mnt->mnt.mnt_flags;
+#endif
+	/* We don`t want to see what zygote`s umount */
+	if (((sb->s_magic == SDFAT_SUPER_MAGIC) ||
+		(sb->s_magic == MSDOS_SUPER_MAGIC)) &&
+		((current_uid().val == 0) && !is_exception(current->comm))) {
+		struct block_device *bdev = sb->s_bdev;
+		dev_t bd_dev = bdev ? bdev->bd_dev : 0;
+
+		ST_LOG("[SYS](%s[%d:%d]): "
+			"umount(mf:0x%x, f:0x%x, %s)\n",
+			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev), mnt_flags,
+			flags, umount_exit_str[sys_umount_trace_status]);
+	}
+}
 
 #ifdef CONFIG_RKP_NS_PROT
 extern u8 ns_prot;
@@ -1190,8 +1254,7 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 		root = mount_fs(type, flags, name, mnt->mnt, data);
 #else
 		mnt->mnt.mnt_flags = MNT_INTERNAL;
-
-	root = mount_fs(type, flags, name, &mnt->mnt, data);
+		root = mount_fs(type, flags, name, &mnt->mnt, data);
 #endif
 
 	if (IS_ERR(root)) {
@@ -1275,7 +1338,6 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 		if (err)
 			goto out_free;
 	}
-
 #ifdef CONFIG_RKP_NS_PROT
 	nsflags = old->mnt->mnt_flags & ~(MNT_WRITE_HOLD|MNT_MARKED);
 	/* Don't allow unprivileged users to change mount flags */
@@ -1429,6 +1491,7 @@ static void mntput_no_expire(struct mount *mnt)
 		 */
 		mnt_add_count(mnt, -1);
 		rcu_read_unlock();
+		sys_umount_trace_set_status(UMOUNT_STATUS_REMAIN_NS);
 		return;
 	}
 	lock_mount_hash();
@@ -1441,6 +1504,7 @@ static void mntput_no_expire(struct mount *mnt)
 	if (mnt_get_count(mnt)) {
 		rcu_read_unlock();
 		unlock_mount_hash();
+		sys_umount_trace_set_status(UMOUNT_STATUS_REMAIN_MNT_COUNT);
 		return;
 	}
 
@@ -1478,11 +1542,15 @@ static void mntput_no_expire(struct mount *mnt)
 		struct task_struct *task = current;
 		if (likely(!(task->flags & PF_KTHREAD))) {
 			init_task_work(&mnt->mnt_rcu, __cleanup_mnt);
-			if (!task_work_add(task, &mnt->mnt_rcu, true))
+			if (!task_work_add(task, &mnt->mnt_rcu, true)) {
+				sys_umount_trace_set_status(UMOUNT_STATUS_ADD_TASK);
 				return;
+			}
 		}
-		if (llist_add(&mnt->mnt_llist, &delayed_mntput_list))
+		if (llist_add(&mnt->mnt_llist, &delayed_mntput_list)) {
 			schedule_delayed_work(&delayed_mntput_work, 1);
+			sys_umount_trace_set_status(UMOUNT_STATUS_ADD_DELAYED_WORK);
+		}
 		return;
 	}
 	cleanup_mnt(mnt);
@@ -1744,7 +1812,7 @@ static bool disconnect_mount(struct mount *mnt, enum umount_tree_flags how)
 	if (!(mnt->mnt_parent->mnt->mnt_flags & MNT_UMOUNT))
 		return true;
 #else
-	if (!(mnt->mnt_parent->mnt.mnt_flags & MNT_UMOUNT))
+if (!(mnt->mnt_parent->mnt.mnt_flags & MNT_UMOUNT))
 		return true;
 #endif
 	/* Has it been requested that the mount remain connected? */
@@ -2052,6 +2120,8 @@ dput_and_out:
 	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
 	dput(path.dentry);
 	mntput_no_expire(mnt);
+	if (!retval)
+		sys_umount_trace_print(mnt, flags);
 out:
 	return retval;
 }
@@ -2902,7 +2972,7 @@ static int do_add_mount(struct mount *newmnt, struct path *path, int mnt_flags)
 #else
 	if (path->mnt->mnt_sb == newmnt->mnt.mnt_sb &&
 #endif
-	    path->mnt->mnt_root == path->dentry)
+		path->mnt->mnt_root == path->dentry)
 		goto unlock;
 
 	err = -EINVAL;
@@ -2941,10 +3011,12 @@ static void rkp_populate_sb(const char __user *dir_name,struct vfsmount *mnt)
 	}
 
 	if (!odm_sb &&
-		!strncmp(mount_point,KDP_MOUNT_ODM,KDP_MOUNT_ODM_LEN)) {
+		(!strncmp(mount_point,KDP_MOUNT_ODM,KDP_MOUNT_ODM_LEN) ||
+		!strncmp(mount_point,KDP_MOUNT_PRODUCT,KDP_MOUNT_PRODUCT_LEN))) {
 		uh_call(UH_APP_RKP, (0x56), (u64)&odm_sb, (u64)mnt, KDP_SB_ODM, 0);
 	} else if (!sys_sb &&
-		!strncmp(mount_point,KDP_MOUNT_SYSTEM,KDP_MOUNT_SYSTEM_LEN)) {
+		(!strncmp(mount_point,KDP_MOUNT_SYSTEM,KDP_MOUNT_SYSTEM_LEN) ||
+		!strncmp(mount_point,KDP_MOUNT_SYSTEM_AS_ROOT,KDP_MOUNT_SYSTEM_AS_ROOT_LEN))) {
 		uh_call(UH_APP_RKP, (0x56), (u64)&sys_sb, (u64)mnt, KDP_SB_SYS, 0);
 	} else if (!vendor_sb &&
 		!strncmp(mount_point,KDP_MOUNT_VENDOR,KDP_MOUNT_VENDOR_LEN)) {

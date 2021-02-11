@@ -1612,6 +1612,10 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		cgroup_sk_alloc(&sk->sk_cgrp_data);
 		sock_update_classid(&sk->sk_cgrp_data);
 		sock_update_netprioidx(&sk->sk_cgrp_data);
+        /* START_OF_KNOX_NPA */
+        sk->knox_uid = current->cred->uid.val;
+        sk->knox_pid = current->tgid;
+        /* END_OF_KNOX_NPA */
 	}
 
 	return sk;
@@ -1747,6 +1751,9 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		sock_reset_flag(newsk, SOCK_MPTCP);
 #endif
 		cgroup_sk_alloc(&newsk->sk_cgrp_data);
+#ifdef CONFIG_MPTCP
+		sock_reset_flag(newsk, SOCK_MPTCP);
+#endif
 		skb_queue_head_init(&newsk->sk_error_queue);
 
 		filter = rcu_dereference_protected(newsk->sk_filter, 1);

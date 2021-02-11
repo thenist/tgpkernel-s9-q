@@ -53,6 +53,7 @@ struct fat_bios_param_block {
 	u32	fat32_vol_id;
 };
 
+static struct kset *fat_kset;
 static int fat_default_codepage = CONFIG_FAT_DEFAULT_CODEPAGE;
 static char fat_default_iocharset[] = CONFIG_FAT_DEFAULT_IOCHARSET;
 
@@ -742,6 +743,13 @@ static struct inode *fat_alloc_inode(struct super_block *sb)
 		return NULL;
 
 	init_rwsem(&ei->truncate_lock);
+	/* Zeroing to allow iput() even if partial initialized inode. */
+	ei->mmu_private = 0;
+	ei->i_start = 0;
+	ei->i_logstart = 0;
+	ei->i_attrs = 0;
+	ei->i_pos = 0;
+
 	return &ei->vfs_inode;
 }
 
@@ -781,7 +789,7 @@ static int __init fat_init_inodecache(void)
 	return 0;
 }
 
-static void __exit fat_destroy_inodecache(void)
+static void fat_destroy_inodecache(void)
 {
 	/*
 	 * Make sure all delayed rcu free inodes are flushed before we
@@ -1372,16 +1380,6 @@ out:
 	return 0;
 }
 
-static void fat_dummy_inode_init(struct inode *inode)
-{
-	/* Initialize this dummy inode to work as no-op. */
-	MSDOS_I(inode)->mmu_private = 0;
-	MSDOS_I(inode)->i_start = 0;
-	MSDOS_I(inode)->i_logstart = 0;
-	MSDOS_I(inode)->i_attrs = 0;
-	MSDOS_I(inode)->i_pos = 0;
-}
-
 static int fat_read_root(struct inode *inode)
 {
 	struct msdos_sb_info *sbi = MSDOS_SB(inode->i_sb);
@@ -1410,8 +1408,7 @@ static int fat_read_root(struct inode *inode)
 	MSDOS_I(inode)->mmu_private = inode->i_size;
 
 	fat_save_attrs(inode, ATTR_DIR);
-	inode->i_mtime.tv_sec = inode->i_atime.tv_sec = inode->i_ctime.tv_sec = 0;
-	inode->i_mtime.tv_nsec = inode->i_atime.tv_nsec = inode->i_ctime.tv_nsec = 0;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	set_nlink(inode, fat_subdirs(inode)+2);
 
 	return 0;
@@ -1833,13 +1830,11 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
 	fat_inode = new_inode(sb);
 	if (!fat_inode)
 		goto out_fail;
-	fat_dummy_inode_init(fat_inode);
 	sbi->fat_inode = fat_inode;
 
 	fsinfo_inode = new_inode(sb);
 	if (!fsinfo_inode)
 		goto out_fail;
-	fat_dummy_inode_init(fsinfo_inode);
 	fsinfo_inode->i_ino = MSDOS_FSINFO_INO;
 	sbi->fsinfo_inode = fsinfo_inode;
 	insert_inode_hash(fsinfo_inode);
@@ -1956,15 +1951,39 @@ static int __init init_fat_fs(void)
 	if (err)
 		goto failed;
 
+	fat_kset = kset_create_and_add("fat", NULL, fs_kobj);
+	if (!fat_kset) {
+		pr_err("FAT-fs failed to create fat kset\n");
+		err = -ENOMEM;
+		goto failed;
+	}
+
+	err = fat_uevent_init(fat_kset);
+	if (err)
+		goto failed;
+
 	return 0;
 
 failed:
+	fat_uevent_uninit();
+	if (fat_kset) {
+		kset_unregister(fat_kset);
+		fat_kset = NULL;
+	}
 	fat_cache_destroy();
+	fat_destroy_inodecache();
 	return err;
 }
 
 static void __exit exit_fat_fs(void)
 {
+	fat_uevent_uninit();
+
+	if (fat_kset) {
+		kset_unregister(fat_kset);
+		fat_kset = NULL;
+	}
+
 	fat_cache_destroy();
 	fat_destroy_inodecache();
 }

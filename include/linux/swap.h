@@ -245,7 +245,7 @@ struct swap_info_struct {
 
 /* linux/mm/workingset.c */
 void *workingset_eviction(struct address_space *mapping, struct page *page);
-bool workingset_refault(void *shadow);
+void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
 extern struct list_lru workingset_shadow_nodes;
 
@@ -524,7 +524,7 @@ static inline swp_entry_t get_swap_page(void)
 
 #endif /* CONFIG_SWAP */
 
-#if defined(CONFIG_MEMCG) && !(CONFIG_MEMCG_FORCE_USE_VM_SWAPPINESS)
+#if defined(CONFIG_MEMCG) && !defined(CONFIG_MEMCG_FORCE_USE_VM_SWAPPINESS)
 static inline int mem_cgroup_swappiness(struct mem_cgroup *memcg)
 {
 	/* Cgroup2 doesn't have per-cgroup swappiness */

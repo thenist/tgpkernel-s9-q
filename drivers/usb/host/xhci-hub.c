@@ -989,7 +989,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			}
 			port_li = readl(port_array[wIndex] + PORTLI);
 			status = xhci_get_ext_port_status(temp, port_li);
-			put_unaligned_le32(cpu_to_le32(status), &buf[4]);
+			put_unaligned_le32(status, &buf[4]);
 		}
 		break;
 	case SetPortFeature:
@@ -1369,6 +1369,8 @@ int xhci_bus_suspend(struct usb_hcd *hcd)
 	__le32 __iomem **port_array;
 	struct xhci_bus_state *bus_state;
 	unsigned long flags;
+	int is_port_connect = 0;
+	int ret;
 	u32 portsc_buf[USB_MAXCHILDREN];
 	bool wake_enabled;
 	int is_port_connect = 0;
@@ -1478,7 +1480,9 @@ int xhci_bus_suspend(struct usb_hcd *hcd)
 		__func__, is_port_connect, usb_hcd_is_primary_hcd(hcd));
 	hcd->state = HC_STATE_SUSPENDED;
 	bus_state->next_statechange = jiffies + msecs_to_jiffies(10);
+
 	spin_unlock_irqrestore(&xhci->lock, flags);
+
 	return 0;
 }
 

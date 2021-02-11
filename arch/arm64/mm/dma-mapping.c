@@ -975,6 +975,11 @@ static bool do_iommu_attach(struct device *dev, const struct iommu_ops *ops,
 			dev->archdata.dma_ops = &iommu_dma_ops;
 	}
 
+	if (!domain->iova_cookie)
+		dev->archdata.dma_ops = &swiotlb_dma_ops;
+	else
+		dev->archdata.dma_ops = &iommu_dma_ops;
+
 	return true;
 out_err:
 	pr_warn("Failed to set up IOMMU for device %s; retaining platform DMA ops\n",

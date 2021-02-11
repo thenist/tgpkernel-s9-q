@@ -47,6 +47,7 @@
 #include <linux/prefetch.h>
 #include <linux/printk.h>
 #include <linux/dax.h>
+#include <linux/psi.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -1770,7 +1771,7 @@ static bool inactive_reclaimable_pages(struct lruvec *lruvec,
 	return false;
 }
 
-static inline bool need_memory_boosting(struct pglist_data *pgdat);
+static inline bool need_memory_boosting(struct pglist_data *pgdat, bool skip);
 
 /*
  * shrink_inactive_list() is a helper for shrink_node().  It returns the number
@@ -1834,7 +1835,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	if (nr_taken == 0)
 		return 0;
 
-	if (need_memory_boosting(pgdat)) {
+	if (need_memory_boosting(pgdat, false)) {
 		force_reclaim = true;
 		ttu |= TTU_IGNORE_ACCESS;
 	}
@@ -2060,6 +2061,7 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		}
 
 		ClearPageActive(page);	/* we are de-activating */
+		SetPageWorkingset(page);
 		list_add(&page->lru, &l_inactive);
 	}
 
@@ -2300,13 +2302,13 @@ static inline bool mem_boost_pgdat_wmark(struct pglist_data *pgdat)
 	return false;
 }
 
-static inline bool need_memory_boosting(struct pglist_data *pgdat)
+static inline bool need_memory_boosting(struct pglist_data *pgdat, bool skip)
 {
 	bool ret;
 
 	test_and_set_mem_boost_timeout();
 
-	if (memory_boosting_disabled)
+	if (!skip && memory_boosting_disabled)
 		return false;
 
 	switch (mem_boost_mode) {
@@ -2431,7 +2433,7 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 		}
 	}
 
-	if (current_is_kswapd() && need_memory_boosting(pgdat)) {
+	if (current_is_kswapd() && need_memory_boosting(pgdat, true)) {
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -3284,6 +3286,7 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 {
 	struct zonelist *zonelist;
 	unsigned long nr_reclaimed;
+	unsigned long pflags;
 	int nid;
 	struct scan_control sc = {
 		.nr_to_reclaim = max(nr_pages, SWAP_CLUSTER_MAX),
@@ -3311,9 +3314,13 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 					    sc.gfp_mask,
 					    sc.reclaim_idx);
 
+	psi_memstall_enter(&pflags);
 	current->flags |= PF_MEMALLOC;
+
 	nr_reclaimed = do_try_to_free_pages(zonelist, &sc);
+
 	current->flags &= ~PF_MEMALLOC;
+	psi_memstall_leave(&pflags);
 
 	trace_mm_vmscan_memcg_reclaim_end(nr_reclaimed);
 
@@ -3346,7 +3353,7 @@ static bool zone_balanced(struct zone *zone, int order, int classzone_idx)
 {
 	unsigned long mark = high_wmark_pages(zone);
 
-	if (current_is_kswapd() && need_memory_boosting(zone->zone_pgdat))
+	if (current_is_kswapd() && need_memory_boosting(zone->zone_pgdat, false))
 		mark *= MEM_BOOST_WMARK_SCALE_FACTOR;
 
 	if (!zone_watermark_ok_safe(zone, order, mark, classzone_idx))
@@ -3467,6 +3474,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 	int i;
 	unsigned long nr_soft_reclaimed;
 	unsigned long nr_soft_scanned;
+	unsigned long pflags;
 	struct zone *zone;
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
@@ -3476,6 +3484,8 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		.may_unmap = 1,
 		.may_swap = 1,
 	};
+
+	psi_memstall_enter(&pflags);
 	count_vm_event(PAGEOUTRUN);
 
 	do {
@@ -3580,6 +3590,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		pgdat->kswapd_failures++;
 
 out:
+	psi_memstall_leave(&pflags);
 	/*
 	 * Return the order kswapd stopped reclaiming at as
 	 * prepare_kswapd_sleep() takes it into account. If another caller
@@ -3782,7 +3793,7 @@ void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
 	if (pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES)
 		return;
 
-	if (need_memory_boosting(pgdat))
+	if (need_memory_boosting(pgdat, false))
 		goto wakeup;
 
 	/* Only wake kswapd if all zones are unbalanced */

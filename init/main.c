@@ -100,6 +100,11 @@
 #include <linux/rkp.h>
 #endif
 
+#ifdef CONFIG_SECURITY_DEFEX
+#include <linux/defex.h>
+void __init __weak defex_load_rules(void) { }
+#endif
+
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
@@ -543,6 +548,7 @@ static void __init mm_init(void)
 	 */
 	page_ext_init_flatmem();
 	mem_init();
+	set_memsize_kernel_type(MEMSIZE_KERNEL_STOP);
 	kmem_cache_init();
 	percpu_init_late();
 	pgtable_init();
@@ -552,8 +558,107 @@ static void __init mm_init(void)
 #ifdef CONFIG_PTRACK_DEBUG
 	ptrack_init();
 #endif
-	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 }
+
+#ifdef CONFIG_UH_RKP
+#ifdef CONFIG_UH_RKP_8G
+__attribute__((section(".rkp.bitmap"))) u8 rkp_pgt_bitmap_arr[0x40000] = {0};
+__attribute__((section(".rkp.dblmap"))) u8 rkp_map_bitmap_arr[0x40000] = {0};
+#else
+__attribute__((section(".rkp.bitmap"))) u8 rkp_pgt_bitmap_arr[0x30000] = {0};
+__attribute__((section(".rkp.dblmap"))) u8 rkp_map_bitmap_arr[0x30000] = {0};
+#endif
+u8 rkp_started; /* 0 initialized by c standard */
+
+static void __init rkp_init(void)
+{
+	struct vm_struct *p;
+	rkp_init_t init;
+
+	init.magic = RKP_INIT_MAGIC;
+	init.vmalloc_start = VMALLOC_START;
+	init.vmalloc_end = (u64)high_memory;
+	init.init_mm_pgd = (u64)__pa(swapper_pg_dir);
+	init.id_map_pgd = (u64)__pa(idmap_pg_dir);
+	init.zero_pg_addr = __pa(empty_zero_page);
+	init.rkp_pgt_bitmap = (u64)__pa(rkp_pgt_bitmap);
+	init.rkp_dbl_bitmap = (u64)__pa(rkp_map_bitmap);
+	init.rkp_bitmap_size = RKP_PGT_BITMAP_LEN;
+#ifdef CONFIG_RKP_KDP
+	init.rkp_prot_page_size = (u64)__rkp_end_prot_page - (u64)__rkp_start_prot_page;
+#else
+	init.rkp_prot_page_size = 0;
+#endif
+#ifdef CONFIG_UH_RKP_FIMC_TYPE
+	init.fimc_type = 1;
+#else
+	init.fimc_type = 0;
+#endif
+	init.fimc_phys_addr = 0;
+
+#ifdef CONFIG_UNMAP_KERNEL_AT_EL0
+	init.tramp_pgd = (u64)__pa(tramp_pg_dir);
+	init.tramp_valias = (u64)TRAMP_VALIAS;
+#endif
+	for (p = vmlist; p; p = p->next) {
+		if (p->addr == (void *)FIMC_LIB_START_VA) {
+			init.fimc_phys_addr = (u64)(p->phys_addr);
+			break;
+		}
+	}
+	init._text = (u64)_text;
+	init._etext = (u64)_etext;
+	init.extra_memory_addr = RKP_EXTRA_MEM_START;
+	init.extra_memory_size = RKP_EXTRA_MEM_SIZE;
+	//init.physmap_addr
+	init._srodata = (u64)__start_rodata;
+	init._erodata = (u64)__end_rodata;
+	init.large_memory = rkp_support_large_memory;
+
+	uh_call(UH_APP_RKP, RKP_START, (u64)&init, (u64)kimage_voffset, 0, 0);
+	rkp_started = 1;
+}
+#endif
+#ifdef CONFIG_RKP_KDP
+#define VERITY_PARAM_LENGTH 20
+static char verifiedbootstate[VERITY_PARAM_LENGTH];
+static int __init verifiedboot_state_setup(char *str)
+{
+	strlcpy(verifiedbootstate, str, sizeof(verifiedbootstate));
+	return 1;
+}
+__setup("androidboot.verifiedbootstate=", verifiedboot_state_setup);
+
+void kdp_init(void)
+{
+	kdp_init_t cred;
+
+	cred.credSize 	= sizeof(struct cred);
+	cred.sp_size	= rkp_get_task_sec_size();
+	cred.pgd_mm 	= offsetof(struct mm_struct,pgd);
+	cred.uid_cred	= offsetof(struct cred,uid);
+	cred.euid_cred	= offsetof(struct cred,euid);
+	cred.gid_cred	= offsetof(struct cred,gid);
+	cred.egid_cred	= offsetof(struct cred,egid);
+
+	cred.bp_pgd_cred 	= offsetof(struct cred,bp_pgd);
+	cred.bp_task_cred 	= offsetof(struct cred,bp_task);
+	cred.type_cred 		= offsetof(struct cred,type);
+	cred.security_cred 	= offsetof(struct cred,security);
+	cred.usage_cred 	= offsetof(struct cred,use_cnt);
+
+	cred.cred_task  	= offsetof(struct task_struct,cred);
+	cred.mm_task 		= offsetof(struct task_struct,mm);
+	cred.pid_task		= offsetof(struct task_struct,pid);
+	cred.rp_task		= offsetof(struct task_struct,real_parent);
+	cred.comm_task 		= offsetof(struct task_struct,comm);
+
+	cred.bp_cred_secptr 	= rkp_get_offset_bp_cred();
+
+	cred.verifiedbootstate = (u64)verifiedbootstate;
+	uh_call(UH_APP_RKP, 0x40, (u64)&cred, 0, 0, 0);
+}
+#endif /*CONFIG_RKP_KDP*/
 
 #ifdef CONFIG_UH_RKP
 #ifdef CONFIG_UH_RKP_8G
@@ -694,7 +799,9 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL, NULL);
 	page_alloc_init();
 
+#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
 	pr_notice("Kernel command line: %s\n", boot_command_line);
+#endif
 	/* parameters may set static keys */
 	jump_label_init();
 	parse_early_param();
@@ -741,6 +848,14 @@ asmlinkage __visible void __init start_kernel(void)
 		 "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
 	idr_init_cache();
+
+	/*
+	 * Allow workqueue creation and work item queueing/cancelling
+	 * early.  Work item execution depends on kthreads and starts after
+	 * workqueue_init().
+	 */
+	workqueue_init_early();
+
 	rcu_init();
 
 	/* trace_printk() and trace points may be used after this */
@@ -830,9 +945,8 @@ asmlinkage __visible void __init start_kernel(void)
 	security_init();
 	dbg_late_init();
 	vfs_caches_init();
+	pagecache_init();
 	signals_init();
-	/* rootfs populating might need page-writeback */
-	page_writeback_init();
 	proc_root_init();
 	nsfs_init();
 	cpuset_init();
@@ -1170,7 +1284,6 @@ static int __ref kernel_init(void *unused)
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret) {
 #ifdef CONFIG_DEFERRED_INITCALLS
-
 			schedule_work(&deferred_initcall_work);
 #endif
 			return 0;
@@ -1188,6 +1301,9 @@ static int __ref kernel_init(void *unused)
 	if (execute_command) {
 		ret = run_init_process(execute_command);
 		if (!ret)
+#ifdef CONFIG_DEFERRED_INITCALLS
+			schedule_work(&deferred_initcall_work);
+#endif
 			return 0;
 		panic("Requested init %s failed (error %d).",
 		      execute_command, ret);
@@ -1225,6 +1341,8 @@ static noinline void __init kernel_init_freeable(void)
 	cad_pid = task_pid(current);
 
 	smp_prepare_cpus(setup_max_cpus);
+
+	workqueue_init();
 
 	do_pre_smp_initcalls();
 	lockup_detector_init();
@@ -1266,4 +1384,7 @@ static noinline void __init kernel_init_freeable(void)
 
 	integrity_load_keys();
 	load_default_modules();
+#ifdef CONFIG_SECURITY_DEFEX
+	defex_load_rules();
+#endif
 }

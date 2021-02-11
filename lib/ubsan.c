@@ -42,7 +42,6 @@ const char *type_check_kinds[] = {
 #endif
 
 #define VALUE_LENGTH 40
-
 static bool was_reported(struct source_location *location)
 {
 	return test_and_set_bit(REPORTED_BIT, &location->reported);
@@ -156,7 +155,7 @@ static void ubsan_sec_report(int isprologue, struct source_location *loc, int rT
 		ubsaninfo.rType = rType;
 		snprintf(ubsaninfo.filename, FILESIZE, "%s\n",loc->file_name);
 	} else {
-		sec_debug_ubsan_handler(&ubsaninfo);
+		sec_debug_ubsan_handler(&ubsaninfo);	
 	}
 }
 #endif
@@ -186,6 +185,7 @@ static void ubsan_epilogue(unsigned long *flags)
 	dump_stack();
 	pr_err("========================================"
 		"========================================\n");
+
 	spin_unlock_irqrestore(&report_lock, *flags);
 	current->in_ubsan--;
 #if defined(CONFIG_SEC_DEBUG_UBSAN)
@@ -450,7 +450,6 @@ void __ubsan_handle_out_of_bounds(struct out_of_bounds_data *data, void *index)
 {
 	unsigned long flags;
 	char index_str[VALUE_LENGTH];
-
 	if (suppress_report(&data->location))
 		return;
 

@@ -378,6 +378,10 @@ void dump_tasks(struct mem_cgroup *memcg, const nodemask_t *nodemask)
 {
 	struct task_struct *p;
 	struct task_struct *task;
+	unsigned long cur_rss_sum;
+	unsigned long heaviest_rss_sum = 0;
+	char heaviest_comm[TASK_COMM_LEN];
+	pid_t heaviest_pid;
 #if defined(CONFIG_ZSWAP)
 	int zswap_stored_pages_temp;
 	unsigned long zswap_pool_pages_temp;
@@ -430,9 +434,31 @@ void dump_tasks(struct mem_cgroup *memcg, const nodemask_t *nodemask)
 			mm_nr_pmds(task->mm),
 			get_mm_counter(task->mm, MM_SWAPENTS),
 			task->signal->oom_score_adj, task->comm);
+		cur_rss_sum = get_mm_rss(task->mm) +
+					get_mm_counter(task->mm, MM_SWAPENTS);
+		if (cur_rss_sum > heaviest_rss_sum) {
+			heaviest_rss_sum = cur_rss_sum;
+			strncpy(heaviest_comm, task->comm, TASK_COMM_LEN);
+			heaviest_pid = task->pid;
+		}
 		task_unlock(task);
 	}
 	rcu_read_unlock();
+	if (heaviest_rss_sum)
+		pr_info("heaviest_task:%s(%d) rss_pages:%lu\n", heaviest_comm,
+			heaviest_pid, heaviest_rss_sum);
+}
+
+static BLOCKING_NOTIFIER_HEAD(oomdebug_notify_list);
+
+int register_oomdebug_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&oomdebug_notify_list, nb);
+}
+
+int unregister_oomdebug_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&oomdebug_notify_list, nb);
 }
 
 static BLOCKING_NOTIFIER_HEAD(oomdebug_notify_list);

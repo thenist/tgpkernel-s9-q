@@ -369,6 +369,7 @@ static void exynos_tmu_control(struct platform_device *pdev, bool on)
 
 	mutex_lock(&data->lock);
 	data->tmu_control(pdev, on);
+	data->enabled = on;
 	mutex_unlock(&data->lock);
 }
 

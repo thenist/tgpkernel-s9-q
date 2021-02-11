@@ -177,9 +177,6 @@ enum zone_stat_item {
 #endif
 	NR_FREE_CMA_PAGES,
 	NR_FREE_RBIN_PAGES,
-#ifdef CONFIG_UKSM
-	NR_UKSM_ZERO_PAGES,
-#endif
 	NR_VM_ZONE_STAT_ITEMS };
 
 enum node_stat_item {
@@ -194,6 +191,7 @@ enum node_stat_item {
 	NR_PAGES_SCANNED,	/* pages scanned since last reclaim */
 	WORKINGSET_REFAULT,
 	WORKINGSET_ACTIVATE,
+	WORKINGSET_RESTORE,
 	WORKINGSET_NODERECLAIM,
 	NR_ANON_MAPPED,	/* Mapped anonymous pages */
 	NR_FILE_MAPPED,	/* pagecache pages mapped into pagetables.

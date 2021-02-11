@@ -253,7 +253,9 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define FLAG_DSACKING_ACK       0x800 /* SACK blocks contained D-SACK info */
 #define FLAG_SACK_RENEGING      0x2000 /* snd_una advanced to a sacked seq */
 #define FLAG_UPDATE_TS_RECENT   0x4000 /* tcp_replace_ts_recent() */
-#define MPTCP_FLAG_DATA_ACKED	0x8000
+#define FLAG_NO_CHALLENGE_ACK	0x8000 /* do not call tcp_send_challenge_ack()	*/
+
+#define MPTCP_FLAG_DATA_ACKED	0x10000
 
 #define FLAG_ACKED              (FLAG_DATA_ACKED|FLAG_SYN_ACKED)
 #define FLAG_NOT_DUP            (FLAG_DATA|FLAG_WIN_UPDATE|FLAG_ACKED)
@@ -499,6 +501,11 @@ extern int tcp_proc_delayed_ack_control(struct ctl_table *table, int write,
 			loff_t *ppos);
 
 void tcp_enter_quickack_mode(struct sock *sk, unsigned int max_quickacks);
+extern int tcp_use_userconfig_sysctl_handler(struct ctl_table *, int,
+				void __user *, size_t *, loff_t *);
+extern int tcp_proc_delayed_ack_control(struct ctl_table *table, int write,
+			void __user *buffer, size_t *length,
+			loff_t *ppos);
 static inline void tcp_dec_quickack_mode(struct sock *sk,
 					 const unsigned int pkts)
 {
@@ -1738,6 +1745,8 @@ struct tcp_fastopen_context {
 	struct rcu_head		rcu;
 };
 
+static inline void tcp_init_send_head(struct sock *sk);
+
 /* write queue abstraction */
 static inline void tcp_write_queue_purge(struct sock *sk)
 {
@@ -1745,6 +1754,7 @@ static inline void tcp_write_queue_purge(struct sock *sk)
 
 	while ((skb = __skb_dequeue(&sk->sk_write_queue)) != NULL)
 		sk_wmem_free_skb(sk, skb);
+	tcp_init_send_head(sk);
 	sk_mem_reclaim(sk);
 	tcp_clear_all_retrans_hints(tcp_sk(sk));
 	tcp_init_send_head(sk);

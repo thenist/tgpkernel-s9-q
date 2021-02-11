@@ -58,7 +58,6 @@
 #include <linux/compat.h>
 #include <linux/vmalloc.h>
 #include <linux/task_integrity.h>
-#include <linux/ksm.h>
 
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
@@ -1718,7 +1717,8 @@ int search_binary_handler(struct linux_binprm *bprm)
 		if (printable(bprm->buf[0]) && printable(bprm->buf[1]) &&
 		    printable(bprm->buf[2]) && printable(bprm->buf[3]))
 			return retval;
-		if (request_module("binfmt-%04x", *(ushort *)(bprm->buf + 2)) < 0)
+		if (request_module(
+			      "binfmt-%04x", *(ushort *)(bprm->buf + 2)) < 0)
 			return retval;
 		need_retry = false;
 		goto retry;
@@ -1791,7 +1791,8 @@ static int rkp_restrict_fork(struct filename *path)
 {
 	struct cred *shellcred;
 
-	if(!strcmp(path->name,"/system/bin/patchoat")){
+	if (!strcmp(path->name, "/system/bin/patchoat") ||
+	    !strcmp(path->name, "/system/bin/idmap2")) {
 		return 0 ;
 	}
         /* If the Process is from Linux on Dex,
@@ -1901,7 +1902,7 @@ static int exec_binprm(struct linux_binprm *bprm)
 		ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
 		proc_exec_connector(current);
 	} else {
-		task_integrity_delayed_reset(current);
+		task_integrity_delayed_reset(current, CAUSE_EXEC, bprm->file);
 	}
 
 	return ret;
@@ -2034,7 +2035,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 	current->fs->in_exec = 0;
 	current->in_execve = 0;
 	acct_update_integrals(current);
-	task_numa_free(current, false);
+	task_numa_free(current);
 	free_bprm(bprm);
 	kfree(pathbuf);
 	putname(filename);

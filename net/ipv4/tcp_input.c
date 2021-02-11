@@ -136,8 +136,6 @@ int sysctl_tcp_netpm[4] __read_mostly;	/* Timestamp, RAT, PHY status, Access TP 
 #define FLAG_FORWARD_PROGRESS	(FLAG_ACKED|FLAG_DATA_SACKED)
 #endif
 
-#define FLAG_NO_CHALLENGE_ACK	0x8000 /* do not call tcp_send_challenge_ack()	*/
-
 #define TCP_REMNANT (TCP_FLAG_FIN|TCP_FLAG_URG|TCP_FLAG_SYN|TCP_FLAG_PSH)
 #define TCP_HP_BITS (~(TCP_RESERVED_BITS|TCP_FLAG_PSH))
 
@@ -281,7 +279,8 @@ static inline u32 netpm_rttvar_avg(struct tcp_sock *tp)
 }
 #endif
 
-static void tcp_gro_dev_warn(struct sock *sk, const struct sk_buff *skb)
+static void tcp_gro_dev_warn(struct sock *sk, const struct sk_buff *skb,
+			     unsigned int len)
 {
 	static bool __once __read_mostly;
 
@@ -292,8 +291,9 @@ static void tcp_gro_dev_warn(struct sock *sk, const struct sk_buff *skb)
 
 		rcu_read_lock();
 		dev = dev_get_by_index_rcu(sock_net(sk), skb->skb_iif);
-		pr_warn("%s: Driver has suspect GRO implementation, TCP performance may be compromised.\n",
-			dev ? dev->name : "Unknown driver");
+		if (!dev || len >= dev->mtu)
+			pr_warn("%s: Driver has suspect GRO implementation, TCP performance may be compromised.\n",
+				dev ? dev->name : "Unknown driver");
 		rcu_read_unlock();
 	}
 }
@@ -316,8 +316,10 @@ static void tcp_measure_rcv_mss(struct sock *sk, const struct sk_buff *skb)
 	if (len >= icsk->icsk_ack.rcv_mss) {
 		icsk->icsk_ack.rcv_mss = min_t(unsigned int, len,
 					       tcp_sk(sk)->advmss);
-		if (unlikely(icsk->icsk_ack.rcv_mss != len))
-			tcp_gro_dev_warn(sk, skb);
+		/* Account for possibly-removed options */
+		if (unlikely(len > icsk->icsk_ack.rcv_mss +
+				   MAX_TCP_OPTION_SPACE))
+			tcp_gro_dev_warn(sk, skb, len);
 	} else {
 		/* Otherwise, we make more careful check taking into account,
 		 * that SACKs block is variable.
@@ -571,21 +573,23 @@ static int __tcp_grow_window(const struct sock *sk, const struct sk_buff *skb)
 static void tcp_grow_window(struct sock *sk, const struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	int room;
+
 #ifdef CONFIG_MPTCP
 	struct sock *meta_sk = mptcp(tp) ? mptcp_meta_sk(sk) : sk;
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 	if (is_meta_sk(sk))
 		return;
-#endif
+#else
+int room;
 
-	room = min_t(int, tp->window_clamp, tcp_space(sk)) - tp->rcv_ssthresh;
+room = min_t(int, tp->window_clamp, tcp_space(sk)) - tp->rcv_ssthresh;
+#endif
 
 	/* Check #1 */
 #ifdef CONFIG_MPTCP
 	if (meta_tp->rcv_ssthresh < meta_tp->window_clamp &&
 	    (int)meta_tp->rcv_ssthresh < tcp_space(meta_sk) &&
-			!tcp_under_memory_pressure(sk)) {
+	    !tcp_under_memory_pressure(sk)) {
 #else
 	if (room > 0 && !tcp_under_memory_pressure(sk)) {
 #endif
@@ -1017,23 +1021,25 @@ void tcp_rcv_space_adjust(struct sock *sk)
 		rcvmem = SKB_TRUESIZE(tp->advmss + MAX_TCP_HEADER);
 		while (tcp_win_from_space(rcvmem) < tp->advmss)
 			rcvmem += 128;
+
 #ifdef CONFIG_NETPM
 		if (netpm(tp)) {
 			netpm_rwnd_max_adjustment(tp);
 			do_div(rcvwin, tp->advmss);
 			rcvbuf = min_t(u64, rcvwin * rcvmem, netpm_rmem_max(tp));
-			if (!tp->netpm_rbuf_flag && rcvbuf >= sysctl_tcp_rmem[1]) {
+			if (!tp->netpm_rbuf_flag && (rcvbuf >= sysctl_tcp_rmem[1] || rcvbuf == netpm_rmem_max(tp))) {
 				pr_info("<netpm> %s rtt_min_ms = %d\n", __func__,
 					jiffies_to_msecs(tp->netpm_rtt_min >> 3));
 				tp->netpm_rbuf_flag = 1;
 			}
 		} else {
-#endif
-		do_div(rcvwin, tp->advmss);
-		rcvbuf = min_t(u64, rcvwin * rcvmem, sysctl_tcp_rmem[2]);
-#ifdef CONFIG_NETPM
+			do_div(rcvwin, tp->advmss);
+			rcvbuf = min_t(u64, rcvwin * rcvmem, sysctl_tcp_rmem[2]);
+			netpm_debug("%s final rcvbuf %d\n", __func__, rcvbuf);
 		}
-		netpm_debug("%s final rcvbuf %d\n", __func__, rcvbuf);
+#else
+			do_div(rcvwin, tp->advmss);
+			rcvbuf = min_t(u64, rcvwin * rcvmem, sysctl_tcp_rmem[2]);
 #endif
 		if (rcvbuf > sk->sk_rcvbuf) {
 			sk->sk_rcvbuf = rcvbuf;
@@ -1327,9 +1333,10 @@ static void tcp_update_reordering(struct sock *sk, const int metric,
 /* This must be called before lost_out is incremented */
 static void tcp_verify_retransmit_hint(struct tcp_sock *tp, struct sk_buff *skb)
 {
-	if (!tp->retransmit_skb_hint ||
-	    before(TCP_SKB_CB(skb)->seq,
-		   TCP_SKB_CB(tp->retransmit_skb_hint)->seq))
+	if ((!tp->retransmit_skb_hint && tp->retrans_out >= tp->lost_out) ||
+	    (tp->retransmit_skb_hint &&
+	     before(TCP_SKB_CB(skb)->seq,
+		    TCP_SKB_CB(tp->retransmit_skb_hint)->seq)))
 		tp->retransmit_skb_hint = skb;
 
 	if (!tp->lost_out ||
@@ -2157,8 +2164,11 @@ tcp_sacktag_write_queue(struct sock *sk, const struct sk_buff *ack_skb,
 		}
 
 		/* Ignore very old stuff early */
-		if (!after(sp[used_sacks].end_seq, prior_snd_una))
+		if (!after(sp[used_sacks].end_seq, prior_snd_una)) {
+			if (i == 0)
+				first_sack_index = -1;
 			continue;
+		}
 
 		used_sacks++;
 	}
@@ -6386,6 +6396,8 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 #ifdef CONFIG_MPTCP
 	struct mptcp_options_received mopt;
 
+#ifdef CONFIG_MPTCP
+	struct mptcp_options_received mopt;
 	mptcp_init_mp_opt(&mopt);
 
 	tcp_parse_options(skb, &tp->rx_opt,

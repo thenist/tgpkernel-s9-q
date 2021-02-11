@@ -538,7 +538,7 @@ void free_initmem(void)
 	 * is not supported by kallsyms.
 	 */
 	unmap_kernel_range((u64)__init_begin, (u64)(__init_end - __init_begin));
-
+ 
 #ifdef CONFIG_UH_RKP
 	uh_call(UH_APP_RKP, RKP_DEFERRED_START, 0, 0, 0, 0);
 #endif

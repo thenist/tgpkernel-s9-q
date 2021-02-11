@@ -216,11 +216,11 @@ static void wb_min_max_ratio(struct bdi_writeback *wb,
 	if (this_bw < tot_bw) {
 		if (min) {
 			min *= this_bw;
-			do_div(min, tot_bw);
+			min = div64_ul(min, tot_bw);
 		}
 		if (max < 100) {
 			max *= this_bw;
-			do_div(max, tot_bw);
+			max = div64_ul(max, tot_bw);
 		}
 	}
 
@@ -1810,6 +1810,7 @@ pause:
 					  pause,
 					  start_time);
 
+		/* IOPP-prevent_infinite_writeback-v1.0.4.4 */
 		/* Do not sleep if the backing device is removed */
 		if (unlikely(!bdi->dev))
 			return;

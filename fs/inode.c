@@ -137,6 +137,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_sb = sb;
 	inode->i_blkbits = sb->s_blocksize_bits;
 	inode->i_flags = 0;
+	atomic64_set(&inode->i_sequence, 0);
 	atomic_set(&inode->i_count, 1);
 	inode->i_op = &empty_iops;
 	inode->i_fop = &no_open_fops;
@@ -190,7 +191,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 #endif
 	mapping->private_data = NULL;
 	mapping->writeback_index = 0;
-#ifdef CONFIG_SDP
+#if defined(CONFIG_SDP) && !defined(CONFIG_FSCRYPT_SDP)
 	mapping->userid = 0;
 #endif
 	mapping->fmp_ci.iv = NULL;
@@ -209,6 +210,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_fsnotify_mask = 0;
 #endif
 	inode->i_flctx = NULL;
+
 	this_cpu_inc(nr_inodes);
 
 	return 0;
@@ -264,6 +266,7 @@ void __destroy_inode(struct inode *inode)
 	if (inode->i_default_acl && !is_uncached_acl(inode->i_default_acl))
 		posix_acl_release(inode->i_default_acl);
 #endif
+
 	this_cpu_dec(nr_inodes);
 }
 EXPORT_SYMBOL(__destroy_inode);

@@ -355,7 +355,7 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	int fault, sig, code;
-	unsigned long vm_flags = VM_READ | VM_WRITE;
+	unsigned long vm_flags = VM_READ | VM_WRITE | VM_EXEC;
 	unsigned int mm_flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	if (notify_page_fault(regs, esr))
@@ -645,7 +645,7 @@ static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGBUS,  0,		"unknown 55"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 56"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 57"			},
-	{ do_bad,		SIGBUS,  0,		"unknown 58" 			},
+	{ do_bad,		SIGBUS,  0,		"unknown 58"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 59"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 60"			},
 	{ do_bad,		SIGBUS,  0,		"section domain fault"		},

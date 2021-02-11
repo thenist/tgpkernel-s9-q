@@ -215,6 +215,17 @@ struct ufs_dev_cmd {
 	struct ufs_query query;
 };
 
+struct ufs_desc_size {
+	int dev_desc;
+	int pwr_desc;
+	int geom_desc;
+	int interc_desc;
+	int unit_desc;
+	int conf_desc;
+	int hlth_desc;
+	int str_desc;
+};
+
 /**
  * ufs_hba_variant: host specific data
  */
@@ -692,8 +703,7 @@ struct ufs_hba {
 	 * CAUTION: Enabling this might reduce overall UFS throughput.
 	 */
 #define UFSHCD_CAP_INTR_AGGR (1 << 4)
-	/* Allow only hibern8 without clk gating */
-#define UFSHCD_CAP_FAKE_CLK_GATING (1 << 5)
+
 	/*
 	 * This capability allows the device auto-bkops to be always enabled
 	 * except during suspend (both runtime and suspend).
@@ -702,6 +712,9 @@ struct ufs_hba {
 	 * the performance of ongoing read/write operations.
 	 */
 #define UFSHCD_CAP_KEEP_AUTO_BKOPS_ENABLED_EXCEPT_SUSPEND (1 << 6)
+
+	/* Allow only hibern8 without clk gating */
+#define UFSHCD_CAP_FAKE_CLK_GATING (1 << 6)
 
 	struct devfreq *devfreq;
 	struct ufs_clk_scaling clk_scaling;
@@ -720,10 +733,24 @@ struct ufs_hba {
 
 	enum bkops_status urgent_bkops_lvl;
 	bool is_urgent_bkops_lvl_checked;
+
+	struct device_attribute unique_number_attr;
+	struct device_attribute manufacturer_id_attr;
+	struct device_attribute lt_attr;
+	char unique_number[UFS_UN_MAX_DIGITS];
+	u16 manufacturer_id;
+	u8 lifetime;
+	unsigned int lc_info;
+
+	struct ufs_monitor monitor;
+
+	enum bkops_status urgent_bkops_lvl;
+	bool is_urgent_bkops_lvl_checked;
 	int latency_hist_enabled;
+	struct io_latency_state io_lat_s;
+	struct ufs_secure_log secure_log;
 	struct io_latency_state io_lat_read;
 	struct io_latency_state io_lat_write;
-	struct ufs_secure_log secure_log;
 
 #if defined(SEC_UFS_ERROR_COUNT)
 	struct SEC_UFS_counting SEC_err_info;

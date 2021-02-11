@@ -32,9 +32,12 @@
 #ifdef CONFIG_SMP
 #include <linux/sched.h>
 #endif
+#include <linux/ologk.h>
 #include <trace/events/power.h>
 
 static LIST_HEAD(cpufreq_policy_list);
+
+struct cpufreq_user_policy core_min_max_policy[NR_CPUS];
 
 static inline bool policy_is_inactive(struct cpufreq_policy *policy)
 {
@@ -392,6 +395,7 @@ static void __cpufreq_notify_transition(struct cpufreq_policy *policy,
 			 (unsigned long)freqs->new, (unsigned long)freqs->cpu);
 		trace_cpu_frequency(freqs->new, freqs->cpu);
 		cpufreq_stats_record_transition(policy, freqs->new);
+		cpufreq_times_record_transition(policy, freqs->new);
 		srcu_notifier_call_chain(&cpufreq_transition_notifier_list,
 				CPUFREQ_POSTCHANGE, freqs);
 		if (likely(policy) && likely(policy->cpu == freqs->cpu))
@@ -1910,9 +1914,14 @@ EXPORT_SYMBOL(cpufreq_unregister_notifier);
 unsigned int cpufreq_driver_fast_switch(struct cpufreq_policy *policy,
 					unsigned int target_freq)
 {
+	int ret;
 	target_freq = clamp_val(target_freq, policy->min, policy->max);
 
-	return cpufreq_driver->fast_switch(policy, target_freq);
+        ret = cpufreq_driver->fast_switch(policy, target_freq);
+	if (ret)
+		cpufreq_times_record_transition(policy, ret);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(cpufreq_driver_fast_switch);
 
@@ -2298,6 +2307,15 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 	policy->min = new_policy->min;
 	policy->max = new_policy->max;
 	trace_cpu_frequency_limits(policy->max, policy->min, policy->cpu);
+	if(policy->cpu < NR_CPUS) {
+		if(/*core_min_max_policy[policy->cpu].min != policy->min ||*/ core_min_max_policy[policy->cpu].max != policy->max) {
+			if(policy->max < OLOG_CPU_FREQ_FILTER || core_min_max_policy[policy->cpu].max < OLOG_CPU_FREQ_FILTER) {
+				perflog(PERFLOG_CPUFREQ, "[%d] %lu, %lu", policy->cpu, policy->min / 1000, policy->max / 1000);
+			}
+			core_min_max_policy[policy->cpu].min = policy->min;
+			core_min_max_policy[policy->cpu].max = policy->max;
+		}
+	}
 
 	policy->cached_target_freq = UINT_MAX;
 
@@ -2534,6 +2552,13 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
 
 	if (cpufreq_disabled())
 		return -ENODEV;
+
+	/*
+	 * The cpufreq core depends heavily on the availability of device
+	 * structure, make sure they are available before proceeding further.
+	 */
+	if (!get_cpu_device(0))
+		return -EPROBE_DEFER;
 
 	if (!driver_data || !driver_data->verify || !driver_data->init ||
 	    !(driver_data->setpolicy || driver_data->target_index ||

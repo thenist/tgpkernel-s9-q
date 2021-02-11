@@ -17,9 +17,9 @@
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_dbg.h>
 
-#if defined(CONFIG_SEC_ABC)  
-#include <linux/sti/abc_common.h>  
-#endif   
+#if defined(CONFIG_SEC_ABC)
+#include <linux/sti/abc_common.h>
+#endif
 
 static char *scsi_log_reserve_buffer(size_t *len)
 {
@@ -249,7 +249,7 @@ out_printk:
 	 * 1. issue_LBA_list[] : record LBAs
 	 * 2. issue_region_map : set bit the region
 	 *    ______________________________________________
-	 *    |63|62|61|60| ....    |52|51|50| ....    |1|0|                 
+	 *    |63|62|61|60| ....    |52|51|50| ....    |1|0|
 	 *    ----------------------------------------------
 	 *   1) 0 ~ 51 : per 200MB : total 10400MB region
 	 *   2) 52  : region of 10400MB~ (USERDATA)
@@ -395,9 +395,9 @@ scsi_log_print_sense_hdr(const struct scsi_device *sdev, const char *name,
 	if (sdev->host->by_ufs) {
 		if (sshdr->sense_key == 0x03) {
 			sdev->host->medium_err_cnt++;
-#if defined(CONFIG_SEC_ABC) 
-		sec_abc_send_event("MODULE=storage@ERROR=ufs_medium_err"); 
-#endif 
+#if defined(CONFIG_SEC_ABC)
+		sec_abc_send_event("MODULE=storage@ERROR=ufs_medium_err");
+#endif
 		} else if (sshdr->sense_key == 0x04)
 			sdev->host->hw_err_cnt++;
 	}

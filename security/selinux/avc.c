@@ -34,6 +34,12 @@
 #include "avc_ss.h"
 #include "classmap.h"
 
+// [ SEC_SELINUX_PORTING_COMMON
+#ifdef SEC_SELINUX_DEBUG
+#include <linux/signal.h>
+#endif
+// ] SEC_SELINUX_PORTING_COMMON
+
 #define AVC_CACHE_SLOTS			512
 #define AVC_DEF_CACHE_THRESHOLD		512
 #define AVC_CACHE_RECLAIM		16
@@ -682,7 +688,11 @@ static struct avc_node *avc_insert(u32 ssid, u32 tsid, u16 tclass,
 		avc_node_populate(node, ssid, tsid, tclass, avd);
 		rc = avc_xperms_populate(node, xp_node);
 		if (rc) {
-			kmem_cache_free(avc_node_cachep, node);
+//[SEC_SELINUX_PORTING_COMMON
+// P191014-03912 - avc_cache.active_nodes is not decresed when "avc_alloc_node-success"&"avc_xperms_populate-fail"
+//			kmem_cache_free(avc_node_cachep, node);
+			avc_node_kill(node);
+//]SEC_SELINUX_PORTING_COMMON
 			return NULL;
 		}
 		head = &avc_cache.slots[hvalue];
@@ -873,7 +883,11 @@ static int avc_update_node(u32 event, u32 perms, u8 driver, u8 xperm, u32 ssid,
 	if (orig->ae.xp_node) {
 		rc = avc_xperms_populate(node, orig->ae.xp_node);
 		if (rc) {
-			kmem_cache_free(avc_node_cachep, node);
+//[SEC_SELINUX_PORTING_COMMON
+// P191014-03912 - avc_cache.active_nodes is not decresed when "avc_alloc_node-success"&"avc_xperms_populate-fail"
+//			kmem_cache_free(avc_node_cachep, node);
+			avc_node_kill(node);
+//]SEC_SELINUX_PORTING_COMMON
 			goto out_unlock;
 		}
 	}
@@ -1042,7 +1056,12 @@ static noinline int avc_denied(u32 ssid, u32 tsid,
 	}
 #endif
 
+#ifdef CONFIG_ALWAYS_ENFORCE
+	if (!(avd->flags & AVD_FLAGS_PERMISSIVE))
+#else
 	if (selinux_enforcing && !(avd->flags & AVD_FLAGS_PERMISSIVE))
+#endif
+// ] SEC_SELINUX_PORTING_COMMON
 		return -EACCES;
 
 	avc_update_node(AVC_CALLBACK_GRANT, requested, driver, xperm, ssid,

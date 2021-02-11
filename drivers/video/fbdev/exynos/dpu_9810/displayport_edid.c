@@ -617,8 +617,9 @@ void edid_check_detail_timing_desc1(struct fb_monspecs *specs, int modedb_len, u
 	supported_videos[VDUMMYTIMING].dv_timings.bt.vsync = mode->vsync_len;
 	supported_videos[VDUMMYTIMING].dv_timings.bt.vbackporch = mode->upper_margin;
 	supported_videos[VDUMMYTIMING].fps = mode->refresh;
-	supported_videos[VDUMMYTIMING].v_sync_pol = (mode->sync & FB_SYNC_VERT_HIGH_ACT);
-	supported_videos[VDUMMYTIMING].h_sync_pol = (mode->sync & FB_SYNC_HOR_HIGH_ACT);
+	/*  VSYNC bit and HSYNC bit is reversed at fbmon.c */
+	supported_videos[VDUMMYTIMING].v_sync_pol = (mode->sync & FB_SYNC_HOR_HIGH_ACT) ? SYNC_POSITIVE : SYNC_NEGATIVE;
+	supported_videos[VDUMMYTIMING].h_sync_pol = (mode->sync & FB_SYNC_VERT_HIGH_ACT) ? SYNC_POSITIVE : SYNC_NEGATIVE;
 	supported_videos[VDUMMYTIMING].edid_support_match = true;
 	preferred_preset = supported_videos[VDUMMYTIMING].dv_timings;
 
@@ -870,6 +871,7 @@ int edid_update(struct displayport_device *hdev)
 	secdp_bigdata_save_item(BD_SINK_NAME, specs.monitor);
 #endif
 	for (i = 1; i < block_cnt; i++)
+		fb_edid_add_monspecs(edid + i * EDID_BLOCK_SIZE, &specs);
 
 	/* find 2D preset */
 	for (i = 0; i < specs.modedb_len; i++)

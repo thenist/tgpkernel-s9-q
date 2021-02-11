@@ -170,11 +170,8 @@ static void sugov_update_commit(struct sugov_policy *sg_policy, u64 time,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	int cpu;
 
-	if (sugov_up_down_rate_limit(sg_policy, time, next_freq)) {
-		/* Reset cached freq as next_freq isn't changed */
-		sg_policy->cached_raw_freq = 0;
+	if (sugov_up_down_rate_limit(sg_policy, time, next_freq))
 		return;
-	}
 
 	if (sg_policy->next_freq == next_freq)
 		return;
@@ -265,12 +262,6 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, u64 time)
 	max_cap = arch_scale_cpu_capacity(NULL, cpu);
 
 	*util = boosted_cpu_util(cpu);
-	
-	if (sched_feat(UTIL_EST)) {
-		*util = max_t(unsigned long, *util,
-			     READ_ONCE(cpu_rq(cpu)->cfs.avg.util_est.enqueued));
-	}
-	
 	if (sched_rt_remove_ratio_for_freq)
 		*util -= ((rt_avg * sched_rt_remove_ratio_for_freq) / 100);
 	if (likely(use_pelt()))
@@ -353,20 +344,17 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 		 * Do not reduce the frequency if the CPU has not been idle
 		 * recently, as the reduction is likely to be premature then.
 		 */
-		if (busy && next_f < sg_policy->next_freq) {
+		if (busy && next_f < sg_policy->next_freq)
 			next_f = sg_policy->next_freq;
-
-			/* Reset cached freq as next_freq has changed */
-			sg_policy->cached_raw_freq = 0;
-		}
 	}
 	sugov_update_commit(sg_policy, time, next_f);
 }
 
-static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
+static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu)
 {
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	struct cpufreq_policy *policy = sg_policy->policy;
+	u64 last_freq_update_time = sg_policy->last_freq_update_time;
 	unsigned long util = 0, max = 1;
 	unsigned int j;
 
@@ -382,7 +370,7 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 		 * enough, don't take the CPU into account as it probably is
 		 * idle now (and clear iowait_boost for it).
 		 */
-		delta_ns = time - j_sg_cpu->last_update;
+		delta_ns = last_freq_update_time - j_sg_cpu->last_update;
 		if (delta_ns > TICK_NSEC) {
 			j_sg_cpu->iowait_boost = 0;
 			continue;
@@ -426,7 +414,7 @@ static void sugov_update_shared(struct update_util_data *hook, u64 time,
 		if (flags & SCHED_CPUFREQ_DL)
 			next_f = sg_policy->policy->cpuinfo.max_freq;
 		else
-			next_f = sugov_next_freq_shared(sg_cpu, time);
+			next_f = sugov_next_freq_shared(sg_cpu);
 
 		sugov_update_commit(sg_policy, time, next_f);
 	}
@@ -641,6 +629,7 @@ static int sugov_init(struct cpufreq_policy *policy)
 {
 	struct sugov_policy *sg_policy;
 	struct sugov_tunables *tunables;
+	unsigned int lat;
 	int ret = 0;
 
 	/* State should be equivalent to EXIT */
@@ -675,19 +664,12 @@ static int sugov_init(struct cpufreq_policy *policy)
 		goto free_sg_policy;
 	}
 
-	if (policy->up_transition_delay_us && policy->down_transition_delay_us) {
-		tunables->up_rate_limit_us = policy->up_transition_delay_us;
-		tunables->down_rate_limit_us = policy->down_transition_delay_us;
-	} else {
-		unsigned int lat;
-
-                tunables->up_rate_limit_us = UP_LATENCY_MULTIPLIER;
-                tunables->down_rate_limit_us = DOWN_LATENCY_MULTIPLIER;
-		lat = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
-		if (lat) {
-                        tunables->up_rate_limit_us *= lat;
-                        tunables->down_rate_limit_us *= lat;
-                }
+	tunables->up_rate_limit_us = UP_LATENCY_MULTIPLIER;
+	tunables->down_rate_limit_us = DOWN_LATENCY_MULTIPLIER;
+	lat = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
+	if (lat) {
+		tunables->up_rate_limit_us *= lat;
+		tunables->down_rate_limit_us *= lat;
 	}
 
 	policy->governor_data = sg_policy;

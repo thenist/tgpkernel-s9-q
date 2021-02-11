@@ -340,7 +340,6 @@ static int __vb2_queue_alloc(struct vb2_queue *q, enum vb2_memory memory,
 		dprintk(1, "Failed to create timeline\n");
 		return 0;
 	}
-
 	/* Ensure that q->num_buffers+num_buffers is below VB2_MAX_FRAME */
 	num_buffers = min_t(unsigned int, num_buffers,
 			    VB2_MAX_FRAME - q->num_buffers);

@@ -72,7 +72,7 @@ int sysctl_tcp_slow_start_after_idle __read_mostly = 1;
 
 #ifndef CONFIG_MPTCP
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
-			   int push_one, gfp_t gfp);
+		    int push_one, gfp_t gfp);
 #endif
 
 /* Account for new data that has been sent to the network. */
@@ -319,6 +319,7 @@ u16 tcp_select_window(struct sock *sk)
 				      LINUX_MIB_TCPWANTZEROWINDOWADV);
 		new_win = ALIGN(cur_win, 1 << tp->rx_opt.rcv_wscale);
 	}
+
 	tp->rcv_wnd = new_win;
 	tp->rcv_wup = tp->rcv_nxt;
 
@@ -777,9 +778,8 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 			      (remaining - TCPOLEN_SACK_BASE_ALIGNED) /
 			      TCPOLEN_SACK_PERBLOCK);
 #ifdef CONFIG_MPTCP
-		if (opts->num_sack_blocks)
-#endif
 		if (likely(opts->num_sack_blocks))
+#endif
 			size += TCPOLEN_SACK_BASE_ALIGNED +
 				opts->num_sack_blocks * TCPOLEN_SACK_PERBLOCK;
 	}
@@ -2431,6 +2431,14 @@ bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			break;
 
 		if (tcp_small_queue_check(sk, skb, 0))
+			break;
+
+		/* Argh, we hit an empty skb(), presumably a thread
+		 * is sleeping in sendmsg()/sk_stream_wait_memory().
+		 * We do not want to send a pure-ack packet and have
+		 * a strange looking rtx queue with empty packet(s).
+		 */
+		if (TCP_SKB_CB(skb)->end_seq == TCP_SKB_CB(skb)->seq)
 			break;
 
 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))

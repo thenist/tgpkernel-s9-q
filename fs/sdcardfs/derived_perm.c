@@ -70,6 +70,7 @@ void get_derived_permission_inode_new(struct dentry *parent,
 	int err;
 	struct qstr q_Android = QSTR_LITERAL("Android");
 	struct qstr q_data = QSTR_LITERAL("data");
+	struct qstr q_sandbox = QSTR_LITERAL("sandbox");
 	struct qstr q_obb = QSTR_LITERAL("obb");
 	struct qstr q_media = QSTR_LITERAL("media");
 	struct qstr q_cache = QSTR_LITERAL("cache");
@@ -122,6 +123,10 @@ void get_derived_permission_inode_new(struct dentry *parent,
 		break;
 	case PERM_ANDROID:
 		if (qstr_case_eq(name, &q_data)) {
+			/* App-specific directories inside; let anyone traverse */
+			info->data->perm = PERM_ANDROID_DATA;
+			set_top(info, info->data);
+		} else if (qstr_case_eq(name, &q_sandbox)) {
 			/* App-specific directories inside; let anyone traverse */
 			info->data->perm = PERM_ANDROID_DATA;
 			set_top(info, info->data);
@@ -416,7 +421,8 @@ int need_graft_path(struct dentry *dentry)
 	struct sdcardfs_sb_info *sbi = SDCARDFS_SB(dentry->d_sb);
 	struct qstr obb = QSTR_LITERAL("obb");
 
-	if (parent_info->data->perm == PERM_ANDROID &&
+	if (!sbi->options.unshared_obb &&
+			parent_info->data->perm == PERM_ANDROID &&
 			qstr_case_eq(&dentry->d_name, &obb)) {
 
 		/* /Android/obb is the base obbpath of DERIVED_UNIFIED */
@@ -528,5 +534,3 @@ int setup_obb_dentry(struct dentry *dentry, struct path *lower_path)
 	}
 	return err;
 }
-
-

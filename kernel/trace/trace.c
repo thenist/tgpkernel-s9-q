@@ -797,7 +797,7 @@ int __trace_puts(unsigned long ip, const char *str, int size)
 
 	local_save_flags(irq_flags);
 	buffer = global_trace.trace_buffer.buffer;
-	event = trace_buffer_lock_reserve(buffer, TRACE_PRINT, alloc, 
+	event = trace_buffer_lock_reserve(buffer, TRACE_PRINT, alloc,
 					  irq_flags, pc);
 	if (!event)
 		return 0;
@@ -1654,6 +1654,15 @@ static int allocate_cmdlines_buffer(unsigned int val,
 		return -ENOMEM;
 	}
 
+	s->map_cmdline_to_tgid = kmalloc_array(val,
+					       sizeof(*s->map_cmdline_to_tgid),
+					       GFP_KERNEL);
+	if (!s->map_cmdline_to_tgid) {
+		kfree(s->map_cmdline_to_pid);
+		kfree(s->saved_cmdlines);
+		return -ENOMEM;
+	}
+
 	s->cmdline_idx = 0;
 	s->cmdline_num = val;
 	memset(&s->map_pid_to_cmdline, NO_CMDLINE_MAP,
@@ -1829,6 +1838,7 @@ static int trace_save_cmdline(struct task_struct *tsk)
 		
 	preempt_disable();
 
+	preempt_disable();
 	/*
 	 * It's not the end of the world if we don't get
 	 * the lock, but we also don't want to spin
@@ -1916,6 +1926,18 @@ static int __find_tgid_locked(int pid)
 	else
 		tgid = -1;
 	
+	return tgid;
+}
+
+int trace_find_tgid(int pid)
+{
+	int tgid;
+
+	preempt_disable();
+	arch_spin_lock(&trace_cmdline_lock);
+
+	tgid = __find_tgid_locked(pid);
+
 	return tgid;
 }
 
@@ -4444,7 +4466,6 @@ tracing_saved_cmdlines_size_read(struct file *filp, char __user *ubuf,
 	unsigned int n;
 
 	preempt_disable();
-
 	arch_spin_lock(&trace_cmdline_lock);
 	n = savedcmd->cmdline_num;
 	arch_spin_unlock(&trace_cmdline_lock);
@@ -4476,7 +4497,7 @@ static int tracing_resize_saved_cmdlines(unsigned int val)
 		return -ENOMEM;
 	}
 
-	preempt_disable();	
+	preempt_disable();
 	arch_spin_lock(&trace_cmdline_lock);
 	savedcmd_temp = savedcmd;
 	savedcmd = s;
@@ -4950,7 +4971,7 @@ static void tracing_set_nop(struct trace_array *tr)
 {
 	if (tr->current_trace == &nop_trace)
 		return;
-	
+
 	tr->current_trace->enabled--;
 
 	if (tr->current_trace->reset)

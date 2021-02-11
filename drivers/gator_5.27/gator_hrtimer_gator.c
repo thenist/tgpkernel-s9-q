@@ -1,5 +1,5 @@
 /**
- * Copyright (C) Arm Limited 2011-2016. All rights reserved.
+ * Copyright (C) ARM Limited 2011-2016. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -36,8 +36,7 @@ static void gator_hrtimer_online(void)
     per_cpu(hrtimer_is_active, cpu) = 1;
     hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
     hrtimer->function = gator_hrtimer_notify;
-#if defined(CONFIG_PREEMPT_RT_BASE) && (LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0))
-    /* irqsafe is removed between preempt_rt 4.9 and 4.11 */
+#ifdef CONFIG_PREEMPT_RT_BASE
     hrtimer->irqsafe = 1;
 #endif
     per_cpu(hrtimer_expire, cpu) = ktime_add(hrtimer->base->get_time(), profiling_interval);

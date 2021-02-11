@@ -10,16 +10,6 @@
  * published by the Free Software Foundation.
  */
 
-#ifdef CONFIG_WAKE_GESTURES
-#include <linux/kernel.h>
-#include <linux/wake_gestures.h>
-static bool is_suspended;
-bool scr_suspended(void)
-{
-	return is_suspended;
-}
-#endif
-
 struct sec_ts_data *tsp_info;
 
 #include "sec_ts.h"
@@ -1300,11 +1290,6 @@ static void sec_ts_read_event(struct sec_ts_data *ts)
 						input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, 1);
 						input_report_key(ts->input_dev, BTN_TOUCH, 1);
 						input_report_key(ts->input_dev, BTN_TOOL_FINGER, 1);
-
-#ifdef CONFIG_WAKE_GESTURES
-						if (is_suspended)
-							ts->coord[t_id].x += 5000;
-#endif
 
 						input_report_abs(ts->input_dev, ABS_MT_POSITION_X, ts->coord[t_id].x);
 						input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, ts->coord[t_id].y);
@@ -2847,11 +2832,8 @@ i2c_error:
 static int sec_ts_input_open(struct input_dev *dev)
 {
 	struct sec_ts_data *ts = input_get_drvdata(dev);
+	char addr[3] = { 0 };
 	int ret;
-
-#ifdef CONFIG_WAKE_GESTURES
-	is_suspended = false;
-#endif
 
 	if (!ts->info_work_done) {
 		input_err(true, &ts->client->dev, "%s not finished info work\n", __func__);
@@ -2886,17 +2868,28 @@ static int sec_ts_input_open(struct input_dev *dev)
 #ifdef USE_RESET_EXIT_LPM
 		schedule_delayed_work(&ts->reset_work, msecs_to_jiffies(TOUCH_RESET_DWORK_TIME));
 #else
-#ifdef CONFIG_WAKE_GESTURES
-		if (s2w_switch || dt2w_switch)
-			disable_irq_wake(ts->client->irq);
-		else
-#endif
 		sec_ts_set_lowpowermode(ts, TO_TOUCH_MODE);
 #endif
 	} else {
 		ret = sec_ts_start_device(ts);
 		if (ret < 0)
 			input_err(true, &ts->client->dev, "%s: Failed to start device\n", __func__);
+	}
+
+	if (ts->pressure_user_level) {
+		input_err(true, &ts->client->dev, "%s: pressure_user_level %d\n", __func__, ts->pressure_user_level);
+
+		addr[0] = SEC_TS_CMD_SPONGE_OFFSET_PRESSURE_LEVEL;
+		addr[1] = 0x00;
+		addr[2] = ts->pressure_user_level;
+
+		ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SPONGE_WRITE_PARAM, addr, 3);
+		if (ret < 0)
+			input_err(true, &ts->client->dev, "%s: Failed to write sponge param\n", __func__);
+
+		ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SPONGE_NOTIFY_PACKET, NULL, 0);
+		if (ret < 0)
+			input_err(true, &ts->client->dev, "%s: Failed to write sponge packet\n", __func__);
 	}
 
 	/* because edge and dead zone will recover soon */
@@ -2911,18 +2904,6 @@ static int sec_ts_input_open(struct input_dev *dev)
 	ts->print_info_cnt_open = 0;
 	ts->print_info_cnt_release = 0;
 	schedule_work(&ts->work_print_info.work);
-
-#ifdef CONFIG_WAKE_GESTURES
-	if (dt2w_switch_changed) {
-		dt2w_switch = dt2w_switch_temp;
-		dt2w_switch_changed = false;
-	}
-	if (s2w_switch_changed) {
-		s2w_switch = s2w_switch_temp;
-		s2w_switch_changed = false;
-	}
-#endif
-
 	return 0;
 }
 
@@ -2930,10 +2911,6 @@ static void sec_ts_input_close(struct input_dev *dev)
 {
 	struct sec_ts_data *ts = input_get_drvdata(dev);
 	struct irq_desc *desc = irq_to_desc(ts->client->irq);
-
-#ifdef CONFIG_WAKE_GESTURES
-	is_suspended = true;
-#endif
 
 	if (!ts->info_work_done) {
 		input_err(true, &ts->client->dev, "%s not finished info work\n", __func__);
@@ -2988,11 +2965,6 @@ static void sec_ts_input_close(struct input_dev *dev)
 
 	ts->pressure_setting_mode = 0;
 
-#ifdef CONFIG_WAKE_GESTURES
-	if (s2w_switch || dt2w_switch) 
-		enable_irq_wake(ts->client->irq);
-	else 
-#endif
 	if (ts->prox_power_off) {
 		sec_ts_stop_device(ts);
 	} else {
@@ -3112,7 +3084,6 @@ out:
 int sec_ts_start_device(struct sec_ts_data *ts)
 {
 	int ret = -1;
-	char addr[3] = { 0 };
 
 	input_info(true, &ts->client->dev, "%s\n", __func__);
 
@@ -3213,20 +3184,7 @@ int sec_ts_start_device(struct sec_ts_data *ts)
 			input_err(true, &ts->client->dev, "%s: Failed to send command(0x%x)",
 					__func__, SET_TS_CMD_SET_CHARGER_MODE);
 	}
-	
-	if (ts->pressure_user_level) {
-		addr[0] = SEC_TS_CMD_SPONGE_OFFSET_PRESSURE_LEVEL;
-		addr[1] = 0x00;
-		addr[2] = ts->pressure_user_level;
 
-		ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SPONGE_WRITE_PARAM, addr, 3);
-		if (ret < 0)
-			goto err;
-
-		ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SPONGE_NOTIFY_PACKET, NULL, 0);
-		if (ret < 0)
-			goto err;
-	}
 err:
 	/* Sense_on */
 	ret = sec_ts_i2c_write(ts, SEC_TS_CMD_SENSE_ON, NULL, 0);
@@ -3244,7 +3202,7 @@ out:
 static int sec_ts_pm_suspend(struct device *dev)
 {
 	struct sec_ts_data *ts = dev_get_drvdata(dev);
-#ifdef USE_OPEN_CLOSE
+#if 0//def USE_OPEN_CLOSE
 	int retval;
 
 	if (ts->input_dev) {

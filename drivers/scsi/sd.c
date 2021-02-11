@@ -917,7 +917,6 @@ static int sd_setup_flush_cmnd(struct scsi_cmnd *cmd)
 		rq->timeout = SD_UFS_TIMEOUT;
 	else
 		rq->timeout = rq->q->rq_timeout * SD_FLUSH_TIMEOUT_MULTIPLIER;
-
 	return BLKPREP_OK;
 }
 
@@ -2037,8 +2036,10 @@ static int sd_read_protection_type(struct scsi_disk *sdkp, unsigned char *buffer
 	u8 type;
 	int ret = 0;
 
-	if (scsi_device_protection(sdp) == 0 || (buffer[12] & 1) == 0)
+	if (scsi_device_protection(sdp) == 0 || (buffer[12] & 1) == 0) {
+		sdkp->protection_type = 0;
 		return ret;
+	}
 
 	type = ((buffer[12] >> 1) & 7) + 1; /* P_TYPE 0 = Type 1 */
 
@@ -3341,7 +3342,7 @@ static int sd_probe(struct device *dev)
 #ifdef CONFIG_LARGE_DIRTY_BUFFER
 		/* apply more throttle on non-ufs scsi device */
 		q->backing_dev_info.capabilities |= BDI_CAP_STRICTLIMIT;
-		bdi_set_min_ratio(&q->backing_dev_info, 20);
+		bdi_set_min_ratio(&q->backing_dev_info, 30);
 		bdi_set_max_ratio(&q->backing_dev_info, 60);
 #endif
 		pr_info("Parameters for SCSI-dev(%s): min/max_ratio: %u/%u "

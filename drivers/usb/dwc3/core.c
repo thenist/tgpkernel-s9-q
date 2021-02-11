@@ -320,6 +320,17 @@ static int dwc3_core_soft_reset(struct dwc3 *dwc)
 
 	return -ETIMEDOUT;
 
+err_usb2phy_init:
+	phy_exit(dwc->usb2_generic_phy);
+
+err_usb2phy_power:
+	phy_power_off(dwc->usb2_generic_phy);
+
+err_usb3phy_power:
+	phy_power_off(dwc->usb3_generic_phy);
+
+	return ret;
+
 done:
 	/*
 	 * For DWC_usb31 controller, once DWC3_DCTL_CSFTRST bit is cleared,
@@ -1164,6 +1175,47 @@ static void dwc3_core_exit_mode(struct dwc3 *dwc)
 		/* do nothing */
 		break;
 	}
+
+	/* de-assert DRVVBUS for HOST and OTG mode */
+	dwc3_set_mode(dwc, DWC3_GCTL_PRTCAP_DEVICE);
+}
+
+static int dwc3_get_option(struct dwc3 *dwc)
+{
+	struct device		*dev = dwc->dev;
+	struct device_node	*node = dev->of_node;
+	int			value;
+
+/* 	There is no 'needs_fifo_resize' in Kernel 4.9 - Check if it can be removed */
+/*
+	if (!of_property_read_u32(node, "tx-fifo-resize", &value)) {
+		dwc->needs_fifo_resize = value ? true : false;
+	} else {
+		dev_err(dev, "can't get tx-fifo-resize from %s node", node->name);
+		return -EINVAL;
+	}
+*/
+	if (!of_property_read_u32(node, "adj-sof-accuracy", &value)) {
+		dwc->adj_sof_accuracy = value ? true : false;
+	} else {
+		dev_err(dev, "can't get adj-sof-accuracy from %s node", node->name);
+		return -EINVAL;
+	}
+	if (!of_property_read_u32(node, "is_not_vbus_pad", &value)) {
+		dwc->is_not_vbus_pad = value ? true : false;
+	} else {
+		dev_err(dev, "can't get is_not_vbus_pad from %s node", node->name);
+		return -EINVAL;
+	}
+	if (!of_property_read_u32(node, "enable_sprs_transfer", &value)) {
+		dwc->sparse_transfer_control = value ? true : false;
+	} else {
+		dev_err(dev, "can't get sprs-xfer-ctrl from %s node", node->name);
+		return -EINVAL;
+	}
+
+	return 0;
+
 }
 
 static int dwc3_get_option(struct dwc3 *dwc)
